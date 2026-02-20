@@ -10,22 +10,30 @@ st.set_page_config(page_title="2026 평일 시수 관리", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    # Instructors: name, rate, mon, tue, wed, thu, fri
+    # 데이터 읽어오기
     ins_df = conn.read(worksheet="Instructors", ttl=0)
-    # Exclusions: start_date, end_date, note
     excl_df = conn.read(worksheet="Exclusions", ttl=0)
+    
+    # [핵심 수정] 강사 데이터의 숫자 컬럼들을 강제로 숫자형으로 변환
+    # 빈칸(NaN)은 0으로 채웁니다.
+    num_cols = ['rate', 'mon', 'tue', 'wed', 'thu', 'fri']
+    if not ins_df.empty:
+        for col in num_cols:
+            if col in ins_df.columns:
+                ins_df[col] = pd.to_numeric(ins_df[col], errors='coerce').fillna(0)
+    
     return ins_df, excl_df
 
 ins_df, excl_df = load_data()
 
-# 2026년 공휴일 (평일 중 공휴일만 관리해도 되지만, 계산 편의상 전체 유지)
+# 2026년 공휴일
 HOLIDAYS = [date(2026,3,1), date(2026,3,2), date(2026,5,5), date(2026,5,24), date(2026,5,25), 
             date(2026,6,6), date(2026,8,15), date(2026,8,17), date(2026,9,24), date(2026,9,25), 
             date(2026,9,26), date(2026,9,28), date(2026,10,3), date(2026,10,9), date(2026,12,25)]
 
 st.title("🚀 2026 강사 시수 관리 (주말 제외)")
 
-# --- 사이드바: 설정 ---
+# --- 사이드바 ---
 with st.sidebar:
     st.header("👤 1. 강사 등록 (월~금)")
     with st.form("ins_form"):
@@ -72,48 +80,51 @@ else:
     st.divider()
 
     target = st.selectbox("조회할 강사 선택", ins_df['name'].unique())
+    # 선택된 강사 데이터 추출
     row = ins_df[ins_df['name'] == target].iloc[-1]
     
-    # 요일별 시수 매핑 (월:0 ~ 금:4)
-    hours_map = {0: row['mon'], 1: row['tue'], 2: row['wed'], 3: row['thu'], 4: row['fri']}
+    # 시수 매핑 시 한 번 더 숫자형으로 확인
+    hours_map = {
+        0: float(row['mon']), 1: float(row['tue']), 2: float(row['wed']), 
+        3: float(row['thu']), 4: float(row['fri'])
+    }
     
     all_excluded_dates = set()
-    for _, ex in edited_excl.iterrows():
-        try:
-            sd = date.fromisoformat(str(ex['start_date']))
-            ed = date.fromisoformat(str(ex['end_date']))
-            curr = sd
-            while curr <= ed:
-                all_excluded_dates.add(curr)
-                curr += timedelta(days=1)
-        except: continue
+    if not edited_excl.empty:
+        for _, ex in edited_excl.iterrows():
+            try:
+                sd = date.fromisoformat(str(ex['start_date']))
+                ed = date.fromisoformat(str(ex['end_date']))
+                curr = sd
+                while curr <= ed:
+                    all_excluded_dates.add(curr)
+                    curr += timedelta(days=1)
+            except: continue
 
     work_data = []
-    total_hours = 0
+    total_hours = 0.0
     current = date(2026, 3, 1)
     while current <= date(2026, 12, 31):
-        # 주말(5, 6)은 무시하고 평일만 계산
         if current.weekday() < 5:
-            day_hours = hours_map.get(current.weekday(), 0)
+            day_hours = hours_map.get(current.weekday(), 0.0)
             if day_hours > 0:
                 if not (current in HOLIDAYS or current in all_excluded_dates):
                     work_data.append(current)
-                    total_hours += day_hours
+                    total_hours += float(day_hours)
         current += timedelta(days=1)
 
     c1, c2, c3 = st.columns(3)
     c1.metric("총 수업 횟수", f"{len(work_data)}회")
-    c2.metric("총 수업 시수", f"{total_hours}시간")
-    c3.metric("예상 급여액", f"{total_hours * row['rate']:,}원")
+    c2.metric("총 수업 시수", f"{total_hours:g}시간")
+    c3.metric("예상 급여액", f"{int(total_hours * row['rate']):,}원")
 
-    # --- 주말 제외 달력 시각화 ---
+    # --- 주말 제외 달력 ---
     st.subheader("📅 2026년 평일 수업 달력 (월-금)")
-    cols = st.columns(2) # 2열로 크게 보기
+    cols = st.columns(2)
     for m in range(3, 13):
         with cols[(m-3)%2]:
             st.write(f"#### {m}월")
             cal = calendar.monthcalendar(2026, m)
-            # 월~금만 슬라이싱하여 추출
             weekdays_only = [week[0:5] for week in cal]
             df = pd.DataFrame(weekdays_only, columns=["월","화","수","목","금"])
             
@@ -129,6 +140,11 @@ else:
     monthly_stats = []
     for m in range(3, 13):
         m_dates = [d for d in work_data if d.month == m]
-        m_hours = sum([hours_map.get(d.weekday(), 0) for d in m_dates])
-        monthly_stats.append({"월": f"{m}월", "횟수": f"{len(m_dates)}회", "시수": f"{m_hours}시간", "급여": f"{m_hours * row['rate']:,}원"})
+        m_hours = sum([hours_map.get(d.weekday(), 0.0) for d in m_dates])
+        monthly_stats.append({
+            "월": f"{m}월", 
+            "횟수": f"{len(m_dates)}회", 
+            "시수": f"{m_hours:g}시간", 
+            "급여": f"{int(m_hours * row['rate']):,}원"
+        })
     st.dataframe(pd.DataFrame(monthly_stats), use_container_width=True)
