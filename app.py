@@ -1,74 +1,86 @@
 import streamlit as st
+from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import date, timedelta
-import plotly.express as px
+import calendar
 
-# 페이지 설정
-st.set_page_config(page_title="2026 시수 계산기", layout="wide")
+st.set_page_config(page_title="실시간 2026 강사 관리", layout="wide")
 
-st.title("📅 2026년 강사 수업 시수 계산기")
+# 1. 구글 시트 연결
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 사이드바 설정
-st.sidebar.header("🗓️ 수업 설정")
-selected_days = st.sidebar.multiselect(
-    "수업 요일 선택",
-    ["월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"],
-    default=["월요일"]
-)
+# 데이터 불러오기 함수 (캐시를 해제하여 실시간성 확보)
+def load_data():
+    ins_df = conn.read(worksheet="Instructors", ttl=0)
+    excl_df = conn.read(worksheet="Exclusions", ttl=0)
+    return ins_df, excl_df
 
-# 요일 한글 -> 숫자 변환
-day_map = {"월요일":0, "화요일":1, "수요일":2, "목요일":3, "금요일":4, "토요일":5, "일요일":6}
-selected_days_idx = [day_map[d] for d in selected_days]
+ins_df, excl_df = load_data()
 
-# 방학/휴무 기간 설정
-st.sidebar.subheader("🚫 제외 기간 (방학 등)")
-excl_start = st.sidebar.date_input("제외 시작일", value=date(2026, 7, 20))
-excl_end = st.sidebar.date_input("제외 종료일", value=date(2026, 8, 20))
+# 2026년 공휴일
+HOLIDAYS = [date(2026,3,1), date(2026,3,2), date(2026,5,5), date(2026,5,24), date(2026,5,25), 
+            date(2026,6,6), date(2026,8,15), date(2026,8,17), date(2026,9,24), date(2026,9,25), 
+            date(2026,9,26), date(2026,9,28), date(2026,10,3), date(2026,10,9), date(2026,12,25)]
 
-# 2026년 공휴일 리스트 (수동 추가 가능)
-holidays = [
-    date(2026, 3, 1), date(2026, 3, 2), # 삼일절
-    date(2026, 5, 5), date(2026, 5, 24), date(2026, 5, 25), # 어린이날/부처님오신날
-    date(2026, 6, 6), date(2026, 8, 15), date(2026, 8, 17), # 현충일/광복절
-    date(2026, 9, 24), date(2026, 9, 25), date(2026, 9, 26), date(2026, 9, 28), # 추석
-    date(2026, 10, 3), date(2026, 10, 9), date(2026, 12, 25) # 개천절/한글날/성탄절
-]
+st.title("🌐 실시간 공유형 2026 강사 관리 시스템")
 
-# 계산 로직 (3월~12월)
-start_date = date(2026, 3, 1)
-end_date = date(2026, 12, 31)
-current = start_date
-res = []
+# --- 사이드바: 입력 ---
+with st.sidebar:
+    st.header("👤 강사 등록")
+    with st.form("ins_form"):
+        name = st.text_input("이름")
+        rate = st.number_input("시급", value=30000, step=1000)
+        days = st.multiselect("요일", ["월", "화", "수", "목", "금", "토", "일"])
+        if st.form_submit_button("저장"):
+            day_map = {"월":"0", "화":"1", "수":"2", "목":"3", "금":"4", "토":"5", "일":"6"}
+            day_str = ",".join([day_map[d] for d in days])
+            new_row = pd.DataFrame([{"name": name, "rate": rate, "days": day_str}])
+            updated_df = pd.concat([ins_df, new_row], ignore_index=True)
+            conn.update(worksheet="Instructors", data=updated_df)
+            st.success("시트에 저장되었습니다!"); st.rerun()
 
-while current <= end_date:
-    if current.weekday() in selected_days_idx:
-        status = "정상 수업"
-        if current in holidays:
-            status = "공휴일 제외"
-        elif excl_start <= current <= excl_end:
-            status = "방학 제외"
-            
-        if status == "정상 수업":
-            res.append({"날짜": current, "월": f"{current.month}월", "요일": selected_days[selected_days_idx.index(current.weekday())]})
-    current += timedelta(days=1)
+    st.header("🚫 날짜 제외")
+    ex_date = st.date_input("제외할 날짜")
+    if st.button("제외 날짜 시트에 추가"):
+        new_ex = pd.DataFrame([{"date": ex_date.isoformat(), "type": "manual"}])
+        updated_ex = pd.concat([excl_df, new_ex], ignore_index=True)
+        conn.update(worksheet="Exclusions", data=updated_ex)
+        st.success("제외 날짜 반영 완료!"); st.rerun()
 
-df = pd.DataFrame(res)
-
-# 결과 화면
-if not df.empty:
-    m_counts = df.groupby("월").size().reset_index(name="횟수")
-    m_counts['월번호'] = m_counts['월'].str.replace('월','').astype(int)
-    m_counts = m_counts.sort_values('월번호')
-
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        st.metric("✅ 연간 총 시수", f"{len(df)}회")
-        st.dataframe(m_counts[["월", "횟수"]], use_container_width=True)
-    with c2:
-        fig = px.bar(m_counts, x='월', y='횟수', color='횟수', text_auto=True, title="월별 수업 분포")
-        st.plotly_chart(fig, use_container_width=True)
-    
-    st.subheader("📅 상세 수업 일정")
-    st.table(df[["날짜", "요일"]])
+# --- 메인: 조회 ---
+if ins_df.empty:
+    st.info("데이터가 없습니다. 강사를 등록하세요.")
 else:
-    st.warning("선택된 수업 일정이 없습니다. 요일을 선택해 주세요.")
+    target = st.selectbox("강사 선택", ins_df['name'].unique())
+    row = ins_df[ins_df['name'] == target].iloc[-1]
+    target_days = [int(d) for d in str(row['days']).split(",")]
+    
+    # 제외 날짜 리스트화
+    manual_excludes = [date.fromisoformat(str(d)) for d in excl_df['date'].tolist()]
+    
+    # 수업일 계산 (3월-12월)
+    work_dates = []
+    current = date(2026, 3, 1)
+    while current <= date(2026, 12, 31):
+        if current.weekday() in target_days:
+            if not (current in HOLIDAYS or current in manual_excludes):
+                work_dates.append(current)
+        current += timedelta(days=1)
+
+    # 요약
+    st.metric("총 급여", f"{len(work_dates) * row['rate']:,}원", f"총 {len(work_dates)}회")
+
+    # 달력 시각화
+    cols = st.columns(3)
+    for m in range(3, 13):
+        with cols[(m-3)%3]:
+            st.write(f"**{m}월**")
+            cal = calendar.monthcalendar(2026, m)
+            df = pd.DataFrame(cal, columns=["월","화","수","목","금","토","일"])
+            def style(v):
+                if v == 0: return ""
+                d = date(2026, m, v)
+                if d in work_dates: return 'background-color: #90EE90'
+                if d in HOLIDAYS or d in manual_excludes: return 'background-color: #FFB6C1'
+                return ""
+            st.table(df.style.applymap(style))
