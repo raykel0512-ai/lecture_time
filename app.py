@@ -10,18 +10,22 @@ st.set_page_config(page_title="2026 평일 시수 관리 Pro", layout="wide")
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_data():
-    ins_df = conn.read(worksheet="Instructors", ttl=0)
-    excl_df = conn.read(worksheet="Exclusions", ttl=0)
-    
-    num_cols = ['rate', 'mon', 'tue', 'wed', 'thu', 'fri']
-    if not ins_df.empty:
-        for col in num_cols:
-            if col in ins_df.columns:
-                ins_df[col] = pd.to_numeric(ins_df[col], errors='coerce').fillna(0)
-    
-    return ins_df, excl_df
-
-ins_df, excl_df = load_data()
+    try:
+        # ttl=0 대신 짧은 캐시를 주어 구글 API 차단을 방지합니다 (60초)
+        ins_df = conn.read(worksheet="Instructors", ttl="1m")
+        excl_df = conn.read(worksheet="Exclusions", ttl="1m")
+        
+        num_cols = ['rate', 'mon', 'tue', 'wed', 'thu', 'fri']
+        if not ins_df.empty:
+            for col in num_cols:
+                if col in ins_df.columns:
+                    ins_df[col] = pd.to_numeric(ins_df[col], errors='coerce').fillna(0)
+        
+        return ins_df, excl_df
+    except Exception as e:
+        st.error(f"⚠️ 구글 시트를 불러오는 중 오류가 발생했습니다.")
+        st.info("체크리스트:\n1. 구글 시트 하단 탭 이름이 'Instructors'와 'Exclusions'인지 확인하세요.\n2. 시트 공유 설정에 서비스 계정 이메일이 '편집자'로 추가되었는지 확인하세요.")
+        st.stop() # 오류 시 여기서 실행 중단
 
 # 2026년 공휴일
 HOLIDAYS = [date(2026,3,1), date(2026,3,2), date(2026,5,5), date(2026,5,24), date(2026,5,25), 
