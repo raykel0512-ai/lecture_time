@@ -7,7 +7,7 @@ from fpdf import FPDF
 import os
 
 # --- 페이지 설정 ---
-st.set_page_config(page_title="2026 강사 관리 시스템", layout="wide")
+st.set_page_config(page_title="2026 강사 관리 시스템 Pro", layout="wide")
 
 # --- [디버깅] 파일 시스템 체크 ---
 with st.sidebar:
@@ -17,7 +17,7 @@ with st.sidebar:
         st.success("✅ font.ttf 발견")
     else:
         st.error("❌ font.ttf 미발견")
-        st.caption(f"현재 폴더 파일: {files}")
+        st.caption("PDF 출력을 위해 font.ttf가 필요합니다.")
 
 # --- 1. 구글 시트 연결 및 데이터 로드 ---
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -47,64 +47,47 @@ HOLIDAYS_DICT = {
     date(2026,10,3): "개천절", date(2026,10,9): "한글날", date(2026,12,25): "성탄절"
 }
 
-# --- 2. PDF 생성 함수 (오류 수정 핵심 부분) ---
+# --- 2. PDF 생성 함수 ---
 def create_pdf(target_name, rate, total_h, total_pay, monthly_stats, work_data):
     pdf = FPDF()
     pdf.add_page()
-    
     font_path = "font.ttf"
     if os.path.exists(font_path):
         pdf.add_font("Nanum", "", font_path)
         pdf.set_font("Nanum", size=20)
     else:
         pdf.set_font("Arial", size=20)
-
-    # 제목
     pdf.cell(200, 20, txt="2026학년도 강사 수업 시수 확인서", ln=True, align='C')
     pdf.ln(10)
-    
     if os.path.exists(font_path): pdf.set_font("Nanum", size=12)
     pdf.cell(100, 10, txt=f"강사 성명: {target_name}", ln=True)
     pdf.cell(100, 10, txt=f"확인 기간: 2026. 03. 01 ~ 2026. 12. 31", ln=True)
     pdf.cell(100, 10, txt=f"시간당 단가: {int(rate):,}원", ln=True)
-    pdf.ln(5)
-    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-    pdf.ln(10)
-
-    # 연간 요약
+    pdf.ln(5); pdf.line(10, pdf.get_y(), 200, pdf.get_y()); pdf.ln(10)
     pdf.cell(100, 10, txt="[연간 최종 합계]", ln=True)
     pdf.cell(100, 10, txt=f"1. 총 수업 횟수: {len(work_data)}회", ln=True)
     pdf.cell(100, 10, txt=f"2. 총 수업 시수: {total_h:g}시간", ln=True)
     pdf.cell(100, 10, txt=f"3. 총 예상 지급액: {int(total_pay):,}원", ln=True)
     pdf.ln(10)
-
-    # 테이블
     pdf.cell(30, 10, "월", border=1, align='C')
-    pdf.cell(40, 10, "수업 횟수", border=1, align='C')
+    pdf.cell(40, 10, "출근 횟수", border=1, align='C')
     pdf.cell(40, 10, "총 시수", border=1, align='C')
     pdf.cell(50, 10, "예상 지급액", border=1, align='C')
     pdf.ln()
-
     for item in monthly_stats:
         pdf.cell(30, 10, item['월'], border=1, align='C')
         pdf.cell(40, 10, item['횟수'], border=1, align='C')
         pdf.cell(40, 10, item['시수'], border=1, align='C')
         pdf.cell(50, 10, item['급여'], border=1, align='R')
         pdf.ln()
-
-    pdf.ln(20)
-    pdf.cell(200, 10, txt="위와 같이 수업 시수 산출 내역을 확인합니다.", ln=True, align='C')
-    pdf.ln(10)
-    pdf.cell(200, 10, txt=date.today().strftime("%Y년 %m월 %d일"), ln=True, align='C')
-    
-    # [수정 포인트] bytearray를 bytes로 변환하여 반환
+    pdf.ln(20); pdf.cell(200, 10, txt="위와 같이 수업 시수 산출 내역을 확인합니다.", ln=True, align='C')
+    pdf.ln(10); pdf.cell(200, 10, txt=date.today().strftime("%Y년 %m월 %d일"), ln=True, align='C')
     return bytes(pdf.output())
 
 # --- 3. 사이드바 UI ---
 with st.sidebar:
     st.header("👤 강사 관리")
     mode = st.radio("작업 선택", ["신규 등록", "수정/삭제"])
-    
     if mode == "신규 등록":
         with st.form("add_form", clear_on_submit=True):
             n_name = st.text_input("강사 이름")
@@ -144,10 +127,9 @@ with st.sidebar:
             conn.update(worksheet="Exclusions", data=st.session_state.excl_df); st.rerun()
 
 # --- 4. 메인 화면 ---
-st.title("👨‍🏫 2026 강사 시수 통합 관리")
+st.title("👨‍🏫 2026 강사 시수 관리 시스템 Pro")
 col_l, col_r = st.columns([0.6, 0.4])
 
-# 모든 제외 날짜 Set 생성
 all_excl = {d for d in HOLIDAYS_DICT}
 for _, ex in st.session_state.excl_df.iterrows():
     try:
@@ -167,11 +149,11 @@ with col_r:
     total_val = 0.0
     if not st.session_state.ins_df.empty:
         for _, ins in st.session_state.ins_df.iterrows():
-            hm = {0: ins['mon'], 1: ins['tue'], 2: ins['wed'], 3: ins['thu'], 4: ins['fri']}
+            hm_all = {0: ins['mon'], 1: ins['tue'], 2: ins['wed'], 3: ins['thu'], 4: ins['fri']}
             curr = date(2026, 3, 1)
             while curr <= date(2026, 12, 31):
                 if curr.weekday() < 5 and curr not in all_excl:
-                    total_val += hm.get(curr.weekday(), 0.0) * ins['rate']
+                    total_val += hm_all.get(curr.weekday(), 0.0) * ins['rate']
                 curr += timedelta(days=1)
     st.metric("연간 총 소요 예산", f"{int(total_val):,}원")
 
@@ -206,44 +188,58 @@ if not st.session_state.ins_df.empty:
     t_h = sum([hm[d.weekday()] for d in work_dates])
     t_p = t_h * row['rate']
 
-    # PDF 및 요약
     c_t, c_p = st.columns([0.7, 0.3])
     with c_p:
         try:
             pdf_data = create_pdf(target, row['rate'], t_h, t_p, m_stats, work_dates)
             st.download_button("📄 PDF 확인서 다운로드", data=pdf_data, file_name=f"Report_{target}.pdf", mime="application/pdf")
-        except Exception as e:
-            st.error(f"PDF 오류: {e}")
+        except Exception as e: st.error(f"PDF 오류: {e}")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("수업 횟수", f"{len(work_dates)}회")
-    c2.metric("총 시수", f"{t_h:g}시간"); c3.metric("예상 강사료", f"{int(t_p):,}원")
+    c1.metric("연간 수업 횟수", f"{len(work_dates)}회")
+    c2.metric("연간 총 시수", f"{t_h:g}시간"); c3.metric("연간 예상 강사료", f"{int(t_p):,}원")
 
-    # 달력
-    st.markdown("""<style>.cal-table { width: 100%; border-collapse: collapse; }
+    # 달력 스타일 및 테이블 생성
+    st.markdown("""<style>
+    .cal-table { width: 100%; border-collapse: collapse; margin-bottom: 5px; }
     .cal-table td, .cal-table th { border: 1px solid #ddd; padding: 8px; text-align: center; }
     .workday { background-color: #90EE90; font-weight: bold; }
-    .excluded { background-color: #FFB6C1; cursor: help; }</style>""", unsafe_allow_html=True)
+    .excluded { background-color: #FFB6C1; cursor: help; }
+    .weekly-sum { background-color: #f0f2f6; font-size: 0.85em; color: #666; font-weight: bold; }
+    </style>""", unsafe_allow_html=True)
 
     cols = st.columns(2)
     for m in range(3, 13):
         with cols[(m-3)%2]:
             st.write(f"#### {m}월 일정")
             cal = calendar.monthcalendar(2026, m)
-            html = '<table class="cal-table"><tr><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th></tr>'
+            
+            # 테이블 헤더에 '주 합계' 추가
+            html = '<table class="cal-table"><tr><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th class="weekly-sum">주 합계</th></tr>'
+            
             for week in cal:
                 html += '<tr>'
-                for i in range(5):
+                week_h = 0.0
+                for i in range(5): # 월-금
                     day = week[i]
                     if day == 0: html += '<td></td>'
                     else:
                         d = date(2026, m, day)
                         cls, title = "", ""
-                        if d in work_dates: cls = "workday"
-                        elif d in tips: cls = "excluded"; title = f'title="{tips[d]}"'
+                        if d in work_dates: 
+                            cls = "workday"
+                            week_h += hm[d.weekday()]
+                        elif d in tips: 
+                            cls = "excluded"; title = f'title="{tips[d]}"'
                         html += f'<td class="{cls}" {title}>{day}</td>'
+                
+                # 주별 합계 열 추가
+                html += f'<td class="weekly-sum">{week_h:g}h</td>'
                 html += '</tr>'
             html += '</table>'
             st.write(html, unsafe_allow_html=True)
-            m_h = sum([hm[d.weekday()] for d in work_dates if d.month == m])
-            st.info(f"💰 {m}월 급여: {int(m_h * row['rate']):,}원")
+            
+            # 하단 상세 요약 (요청사항: 출근 일수, 총 시수 포함)
+            m_d_count = len([d for d in work_dates if d.month == m])
+            m_h_total = sum([hm[d.weekday()] for d in work_dates if d.month == m])
+            st.info(f"💰 **{m}월 예상 급여: {int(m_h_total * row['rate']):,}원**  \n📅 출근 일수: {m_d_count}회 | ⏱️ 총 수업 시수: {m_h_total:g}시간")
