@@ -19,6 +19,7 @@ def get_initial_after_df(target_name):
         "w1": [0]*10, "w2": [0]*10, "w3": [0]*10, "w4": [0]*10, "w5": [0]*10
     })
 
+# 데이터 로딩 로직
 if 'ins_df' not in st.session_state:
     try:
         df = conn.read(worksheet="Instructors", ttl=0)
@@ -40,6 +41,10 @@ if 'after_df' not in st.session_state:
             df_aft[col] = pd.to_numeric(df_aft[col], errors='coerce').fillna(0).astype(int)
         st.session_state.after_df = df_aft
     except: st.session_state.after_df = pd.DataFrame(columns=['name', 'month', 'w1', 'w2', 'w3', 'w4', 'w5'])
+
+if 'excl_indiv_df' not in st.session_state:
+    try: st.session_state.excl_indiv_df = conn.read(worksheet="Exclusions_Indiv", ttl=0)
+    except: st.session_state.excl_indiv_df = pd.DataFrame(columns=['name', 'date', 'note'])
 
 HOLIDAYS_DICT = {
     date(2026,3,1): "삼일절", date(2026,3,2): "대체공휴일", date(2026,5,5): "어린이날", 
@@ -65,10 +70,10 @@ def create_pdf(target_name, rate, rate_after, total_reg, total_after, total_pay,
         pdf.cell(12, 10, m['월'], 1, 0, 'C'); pdf.cell(12, 10, str(m['출근']), 1, 0, 'C'); pdf.cell(18, 10, str(m['정규h']), 1, 0, 'C'); pdf.cell(18, 10, str(m['방과후h']), 1, 0, 'C'); pdf.cell(32, 10, m['정규급여'], 1, 0, 'R'); pdf.cell(32, 10, m['방과후급여'], 1, 0, 'R'); pdf.cell(32, 10, m['급여'], 1, 1, 'R')
     return bytes(pdf.output())
 
-# --- 3. 사이드바 ---
+# --- 3. 사이드바 (강사 등록/수정) ---
 with st.sidebar:
     st.header("👤 강사 관리")
-    mode = st.radio("작업", ["등록/수정", "제외일정"])
+    mode = st.radio("작업", ["등록/수정", "공통제외일정"])
     if mode == "등록/수정":
         sub = st.selectbox("구분", ["신규 등록", "수정/삭제"])
         if sub == "신규 등록":
@@ -94,148 +99,169 @@ with st.sidebar:
                     if c1.form_submit_button("수정"):
                         st.session_state.ins_df.loc[st.session_state.ins_df['name']==tn, ['rate','rate_after','mon','tue','wed','thu','fri']] = [er, era, em, et, ew, eth, ef]
                         conn.update(worksheet="Instructors", data=st.session_state.ins_df); st.rerun()
-                    if c2.form_submit_button("❌ 삭제"):
+                    if c2.form_submit_button("삭제"):
                         st.session_state.ins_df = st.session_state.ins_df[st.session_state.ins_df['name']!=tn]
                         conn.update(worksheet="Instructors", data=st.session_state.ins_df); st.rerun()
     else:
-        ex_r = st.date_input("제외 기간", (date(2026,7,20), date(2026,8,20)))
+        ex_r = st.date_input("공통 제외 기간", (date(2026,7,20), date(2026,8,20)))
         ex_n = st.text_input("사유")
-        if st.button("제외 저장"):
+        if st.button("공통 제외 저장"):
             new_ex = pd.DataFrame([{"start_date": ex_r[0].isoformat(), "end_date": ex_r[1].isoformat(), "note": ex_n}])
             st.session_state.excl_df = pd.concat([st.session_state.excl_df, new_ex], ignore_index=True)
             conn.update(worksheet="Exclusions", data=st.session_state.excl_df); st.rerun()
 
 # --- 4. 메인 대시보드 ---
-st.title("👨‍🏫 2026 강사 통합 관리 시스템 (정규/방과후)")
-all_excl = {d for d in HOLIDAYS_DICT}
+st.title("👨‍🏫 2026 강사 통합 관리 시스템 Pro")
+all_excl_common = {d for d in HOLIDAYS_DICT}
 for _, ex in st.session_state.excl_df.iterrows():
     try:
         s, e = date.fromisoformat(str(ex['start_date'])), date.fromisoformat(str(ex['end_date']))
-        while s <= e: all_excl.add(s); s += timedelta(days=1)
+        while s <= e: all_excl_common.add(s); s += timedelta(days=1)
     except: continue
 
 col_e, col_b = st.columns([0.6, 0.4])
 with col_e:
-    with st.expander("🗓️ 공통 제외 일정 관리"):
+    with st.expander("🗓️ 공통 제외 일정 관리 (방학/공휴일)"):
         edited_ex = st.data_editor(st.session_state.excl_df, num_rows="dynamic", use_container_width=True)
-        if st.button("공통 일정 저장"):
+        if st.button("공통 일정 최종 저장"):
             st.session_state.excl_df = edited_ex
             conn.update(worksheet="Exclusions", data=edited_ex); st.rerun()
+
 with col_b:
     grand_total = 0
     if not st.session_state.ins_df.empty:
         for _, ins in st.session_state.ins_df.iterrows():
+            # 개인별 제외 날짜 고려
+            indiv_ex = set()
+            if not st.session_state.excl_indiv_df.empty:
+                i_df = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name'] == ins['name']]
+                indiv_ex = {date.fromisoformat(str(d)) for d in i_df['date'].tolist()}
+            
             hm_all = {0: int(ins['mon']), 1: int(ins['tue']), 2: int(ins['wed']), 3: int(ins['thu']), 4: int(ins['fri'])}
             curr = date(2026, 3, 1)
             while curr <= date(2026, 12, 31):
-                if curr.weekday() < 5 and curr not in all_excl: grand_total += hm_all.get(curr.weekday(), 0) * int(ins['rate'])
+                if curr.weekday() < 5 and curr not in all_excl_common and curr not in indiv_ex:
+                    grand_total += hm_all.get(curr.weekday(), 0) * int(ins['rate'])
                 curr += timedelta(days=1)
-            target_aft = st.session_state.after_df[st.session_state.after_df['name'] == ins['name']]
-            grand_total += int(target_aft[['w1','w2','w3','w4','w5']].sum().sum() * ins.get('rate_after', 50000))
-    st.metric("연간 총 소요 예산", f"{grand_total:,}원")
+            # 방과후 합산
+            t_aft = st.session_state.after_df[st.session_state.after_df['name'] == ins['name']]
+            grand_total += int(t_aft[['w1','w2','w3','w4','w5']].sum().sum() * ins.get('rate_after', 50000))
+    st.metric("연간 전체 소요 예산", f"{grand_total:,}원")
 
 st.divider()
 
-# --- 5. 상세 리포트 ---
+# --- 5. 상세 리포트 및 개인별 일정 관리 ---
 if not st.session_state.ins_df.empty:
     target = st.selectbox("조회 강사 선택", st.session_state.ins_df['name'].unique())
     ins_row = st.session_state.ins_df[st.session_state.ins_df['name'] == target].iloc[-1]
     hm = {0: int(ins_row['mon']), 1: int(ins_row['tue']), 2: int(ins_row['wed']), 3: int(ins_row['thu']), 4: int(ins_row['fri'])}
     
+    # 개인별 휴무일 설정
+    st.subheader(f"📍 {target} 강사 개인 전용 일정 관리")
+    col_ind1, col_ind2 = st.columns([0.6, 0.4])
+    with col_ind1:
+        # 개인별 제외 날짜 추가
+        with st.form(f"indiv_ex_form_{target}"):
+            new_ind_date = st.date_input("개인 휴무 날짜 선택")
+            new_ind_note = st.text_input("휴무 사유 (예: 병가, 개인사정)")
+            if st.form_submit_button("개인 휴무일 추가"):
+                new_row = pd.DataFrame([{"name": target, "date": new_ind_date.isoformat(), "note": new_ind_note}])
+                st.session_state.excl_indiv_df = pd.concat([st.session_state.excl_indiv_df, new_row], ignore_index=True)
+                conn.update(worksheet="Exclusions_Indiv", data=st.session_state.excl_indiv_df)
+                st.success(f"{new_ind_date} 추가됨"); st.rerun()
+    with col_ind2:
+        # 개인별 제외 날짜 목록 및 삭제
+        st.write("현재 등록된 개인 휴무")
+        target_ind_ex = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name'] == target]
+        if not target_ind_ex.empty:
+            edited_ind = st.data_editor(target_ind_ex[['date', 'note']], num_rows="dynamic", key=f"editor_ind_{target}")
+            if st.button("개인 휴무 변경사항 저장"):
+                others = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name'] != target]
+                edited_ind['name'] = target
+                st.session_state.excl_indiv_df = pd.concat([others, edited_ind], ignore_index=True)
+                conn.update(worksheet="Exclusions_Indiv", data=st.session_state.excl_indiv_df); st.rerun()
+
+    st.divider()
+
+    # 데이터 통합 계산 로직
     target_aft_data = st.session_state.after_df[st.session_state.after_df['name'] == target]
     cur_aft_df = target_aft_data.copy().reset_index(drop=True) if not target_aft_data.empty else get_initial_after_df(target)
 
+    # 모든 제외 사유 통합 툴팁
     tips = {d: HOLIDAYS_DICT[d] for d in HOLIDAYS_DICT}
     for _, ex in st.session_state.excl_df.iterrows():
         try:
             s, e = date.fromisoformat(str(ex['start_date'])), date.fromisoformat(str(ex['end_date']))
             while s <= e: tips[s] = ex['note']; s += timedelta(days=1)
         except: continue
+    # 개인별 제외 추가
+    for _, ex in target_ind_ex.iterrows():
+        try: tips[date.fromisoformat(str(ex['date']))] = f"[개인] {ex['note']}"
+        except: continue
 
     work_dates = [d for d in [date(2026,3,1) + timedelta(n) for n in range(306)] if d.weekday() < 5 and d not in tips and hm.get(d.weekday(), 0) > 0]
 
-    m_stats, total_reg_h, total_aft_h, total_att = [], 0, 0, 0
-    
+    # 상세 리포트 및 달력 출력
+    m_stats = []
+    total_reg_h, total_aft_h, total_att = 0, 0, 0
     st.subheader(f"📊 {target} 강사 상세 리포트")
     cols = st.columns(2)
     for m in range(3, 13):
         with cols[(m-3)%2]:
             st.write(f"#### 🗓️ {m}월")
-            
-            # [입력창 먼저] 주차별 방과후 시수 가져오기
             m_label = f"{m}월"
             r_idx = cur_aft_df[cur_aft_df['month'] == m_label].index[0]
-            
             cal_col, aft_col = st.columns([0.75, 0.25])
             with aft_col:
-                st.caption("방과후 입력")
-                wa1 = st.number_input(f"{m}월 1주", value=int(cur_aft_df.at[r_idx,'w1']), step=1, key=f"w1_{target}_{m}")
-                wa2 = st.number_input(f"{m}월 2주", value=int(cur_aft_df.at[r_idx,'w2']), step=1, key=f"w2_{target}_{m}")
-                wa3 = st.number_input(f"{m}월 3주", value=int(cur_aft_df.at[r_idx,'w3']), step=1, key=f"w3_{target}_{m}")
-                wa4 = st.number_input(f"{m}월 4주", value=int(cur_aft_df.at[r_idx,'w4']), step=1, key=f"w4_{target}_{m}")
-                wa5 = st.number_input(f"{m}월 5주", value=int(cur_aft_df.at[r_idx,'w5']), step=1, key=f"w5_{target}_{m}")
-                aft_vals = [wa1, wa2, wa3, wa4, wa5]
-                cur_aft_df.loc[r_idx, ['w1','w2','w3','w4','w5']] = aft_vals
-
+                wa = [st.number_input(f"{m}월 {i+1}주", value=int(cur_aft_df.at[r_idx, f'w{i+1}']), step=1, key=f"w{i+1}_{target}_{m}") for i in range(5)]
+                cur_aft_df.loc[r_idx, ['w1','w2','w3','w4','w5']] = wa
             with cal_col:
                 cal = calendar.monthcalendar(2026, m)
                 html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:14px;">'
                 html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#666;">정규h</th><th style="color:#007bff; font-weight:bold;">통합h</th></tr>'
-                
-                monthly_reg_att_days = set()
+                m_reg_days = set()
                 for w_idx, week in enumerate(cal):
                     if w_idx >= 5: break
                     html += '<tr>'
-                    w_reg_h = 0
+                    wrh = 0
                     for i in range(5):
                         day = week[i]
                         if day == 0: html += '<td></td>'
                         else:
                             d = date(2026, m, day)
+                            cls, title = "", ""
                             if d in work_dates: 
-                                html += f'<td style="border:1px solid #ddd; padding:5px; background:#90EE90; font-weight:bold;">{day}</td>'
-                                w_reg_h += hm[d.weekday()]; monthly_reg_att_days.add(d)
+                                cls = "background:#90EE90; font-weight:bold;"
+                                wrh += hm[d.weekday()]; m_reg_days.add(d)
                             elif d in tips: 
-                                html += f'<td style="border:1px solid #ddd; padding:5px; background:#FFB6C1; cursor:help;" title="{tips[d]}">{day}</td>'
-                            else:
-                                html += f'<td style="border:1px solid #ddd; padding:5px;">{day}</td>'
-                    
-                    # 주별 합계 열
-                    html += f'<td style="border:1px solid #ddd; background:#f9f9f9; color:#666;">{int(w_reg_h)}</td>'
-                    html += f'<td style="border:1px solid #ddd; background:#eef6ff; color:#007bff; font-weight:bold;">{int(w_reg_h + aft_vals[w_idx])}</td></tr>'
+                                cls = "background:#FFB6C1; cursor:help;"
+                                title = f'title="{tips[d]}"'
+                            html += f'<td style="border:1px solid #ddd; padding:5px; {cls}" {title}>{day}</td>'
+                    html += f'<td style="border:1px solid #ddd; background:#f9f9f9; color:#666;">{int(wrh)}</td>'
+                    html += f'<td style="border:1px solid #ddd; background:#eef6ff; color:#007bff; font-weight:bold;">{int(wrh + wa[w_idx])}</td></tr>'
                 st.write(html + '</table>', unsafe_allow_html=True)
+            m_att = len(m_reg_days); m_rh = sum([hm[d.weekday()] for d in m_reg_days]); m_ah = sum(wa)
+            m_rp = m_rh * int(ins_row['rate']); m_ap = m_ah * int(ins_row.get('rate_after', 50000))
+            st.info(f"**💰 {m}월 통합: {(m_rp + m_ap):,}원** (정규 {m_rp:,}원 / 방과후 {m_ap:,}원) | 출근 {m_att}일 / {int(m_rh+m_ah)}h")
+            m_stats.append({"월":f"{m}월", "출근":m_att, "정규h":m_rh, "방과후h":m_ah, "정규급여":f"{m_rp:,}원", "방과후급여":f"{m_ap:,}원", "급여":f"{(m_rp + m_ap):,}"})
+            total_reg_h += m_rh; total_aft_h += m_ah; total_att += m_att
 
-            # [수정] 월별 요약 상세 데이터 (정규/방과후/통합/시수 모두 포함)
-            m_att = len(monthly_reg_att_days)
-            m_reg_h = sum([hm[d.weekday()] for d in monthly_reg_att_days])
-            m_aft_h = sum(aft_vals)
-            m_reg_pay = m_reg_h * int(ins_row['rate'])
-            m_aft_pay = m_aft_h * int(ins_row.get('rate_after', 50000))
-            m_total_pay = m_reg_pay + m_aft_pay
-            
-            st.info(f"""
-            **💰 {m}월 통합 급여: {m_total_pay:,}원**  
-            - 정규: {int(m_reg_h)}h ({m_reg_pay:,}원) | 방과후: {int(m_aft_h)}h ({m_aft_pay:,}원)  
-            - 정규 출근: {m_att}일 / 통합 총 시수: {int(m_reg_h + m_aft_h)}h
-            """)
-            m_stats.append({"월":f"{m}월", "출근":m_att, "정규h":m_reg_h, "방과후h":m_aft_h, "정규급여":f"{m_reg_pay:,}원", "방과후급여":f"{m_aft_pay:,}원", "급여":f"{m_total_pay:,}원"})
-            total_reg_h += m_reg_h; total_aft_h += m_aft_h; total_att += m_att
-
-    # 저장 및 최종 요약
     st.divider()
-    if st.button(f"💾 {target} 강사 시수 저장 및 시트 동기화"):
+    if st.button(f"💾 {target} 강사 시수(방과후) 저장"):
         others = st.session_state.after_df[st.session_state.after_df['name'] != target]
         st.session_state.after_df = pd.concat([others, cur_aft_df], ignore_index=True)
         conn.update(worksheet="AfterSchool", data=st.session_state.after_df); st.rerun()
 
     st.subheader("🏁 연간 최종 합계")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("총 출근 (정규기준)", f"{total_att}일")
-    c2.metric("정규 총 시수", f"{int(total_reg_h)}h")
-    c3.metric("방과후 총 시수", f"{int(total_aft_h)}h")
-    c4.metric("최종 합산 급여", f"{int((total_reg_h*ins_row['rate'])+(total_aft_h*ins_row.get('rate_after',50000))):,}원")
-
+    c1.metric("총 출근 (정규)", f"{total_att}일")
+    c2.metric("정규 시수", f"{int(total_reg_h)}h")
+    c3.metric("방과후 시수", f"{int(total_aft_h)}h")
+    c4.metric("최종 예상 급여", f"{int((total_reg_h*ins_row['rate'])+(total_aft_h*ins_row.get('rate_after',50000))):,}원")
+    
     try:
         pdf_b = create_pdf(target, ins_row['rate'], ins_row.get('rate_after', 50000), total_reg_h, total_aft_h, (total_reg_h*ins_row['rate'])+(total_aft_h*ins_row.get('rate_after',50000)), m_stats, total_att)
+        st.download_button("📄 PDF 확인서 다운로드", pdf_b, f"Report_{target}.pdf", "application/pdf")
+    except: st.caption("PDF 생성 중...")
         st.download_button("📄 PDF 확인서 다운로드", pdf_b, f"Report_{target}.pdf", "application/pdf")
     except: st.caption("PDF 폰트 확인 필요")
