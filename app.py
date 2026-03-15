@@ -196,29 +196,42 @@ if not st.session_state.ins_df.empty:
                     st.download_button(f"⬇️ 다운로드", pdf_data, f"2026_{m}월_현황_{target}.pdf", "application/pdf", key=f"dl_{m}")
 
             with cal_c:
-                # 주차(num_weeks)만큼 무조건 루프 실행
+                cal = calendar.monthcalendar(2026, m)
                 html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
                 html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#007bff;">통합</th></tr>'
+                
                 m_reg_cnt = 0
-                for w_idx in range(num_weeks):
-                    week = cal[w_idx]
+                for w_idx, week in enumerate(cal): # 주차 수만큼 무조건 반복
                     html += '<tr>'
                     wrh = 0
-                    for i in range(6):
+                    for i in range(5): # 월~금
                         day = week[i]
-                        if day == 0: html += '<td></td>'
+                        if day == 0:
+                            html += '<td></td>'
                         else:
-                            d = date(2026, m, day); cls, t = "", ""
-                            if d in work_dates: 
+                            d = date(2026, m, day)
+                            # --- 색상 로직 ---
+                            cls = ""
+                            t = ""
+                            if d in work_dates:
                                 cls = "background:#90EE90; font-weight:bold;"
-                                wrh += hm.get(d.weekday(), 0); m_reg_cnt += 1
+                                wrh += hm.get(d.weekday(), 0)
+                                m_reg_cnt += 1
                                 if d in adds: cls = "background:#add8e6; font-weight:bold;"
-                            elif d in tips: cls = "background:#FFB6C1; cursor:help;"; t = f'title="{tips[d]}"'
+                            elif d in tips:
+                                cls = "background:#FFB6C1; cursor:help;"
+                                t = f'title="{tips[d]}"'
                             html += f'<td style="border:1px solid #ddd; padding:4px; {cls}" {t}>{day}</td>'
                     
-                    # 방과후 시수 합산 (wa 리스트 사용)
-                    current_wa = wa[w_idx] if w_idx < len(wa) else 0
-                    html += f'<td style="border:1px solid #ddd; background:#eef6ff; font-weight:bold;">{int(wrh + current_wa)}</td></tr>'
+                    # --- 통합h 계산 (안전장치 추가) ---
+                    # wa 리스트가 w_idx보다 짧아도 에러 안 나게 처리
+                    try:
+                        this_week_aft = wa[w_idx]
+                    except:
+                        this_week_aft = 0
+                        
+                    html += f'<td style="border:1px solid #ddd; background:#eef6ff; font-weight:bold;">{int(wrh + this_week_aft)}</td></tr>'
+                
                 st.write(html + '</table>', unsafe_allow_html=True)
 
             m_ah, m_rh = sum(wa), sum([hm.get(d.weekday(), 0) for d in m_work])
