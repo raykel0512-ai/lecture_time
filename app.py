@@ -19,6 +19,7 @@ def get_initial_after_df(target_name):
         "w1": [0]*10, "w2": [0]*10, "w3": [0]*10, "w4": [0]*10, "w5": [0]*10
     })
 
+# 데이터 로딩 (에러 방지 및 정수화)
 if 'ins_df' not in st.session_state:
     try:
         df = conn.read(worksheet="Instructors", ttl=0)
@@ -54,7 +55,7 @@ HOLIDAYS_DICT = {
     date(2026,10,3): "개천절", date(2026,10,9): "한글날", date(2026,12,25): "성탄절"
 }
 
-# --- 2. PDF 생성 함수 (정규 수업 전용) ---
+# --- 2. 이미지 양식 맞춤형 PDF 생성 함수 (정규 수업 전용) ---
 def create_monthly_pdf(target_row, month, worked_dates, h_map):
     pdf = FPDF()
     pdf.add_page()
@@ -62,9 +63,9 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map):
     if os.path.exists(font_path): pdf.add_font("Nanum", "", font_path); pdf.set_font("Nanum", size=11)
     else: pdf.set_font("Arial", size=11)
 
-    pdf.set_font("Nanum", size=18)
+    pdf.set_font("Nanum", size=18 if os.path.exists(font_path) else 18)
     pdf.cell(190, 15, txt=f"2026학년도 {month} 시간강사 수업 현황", ln=True, align='C')
-    pdf.set_font("Nanum", size=11)
+    pdf.set_font("Nanum", size=11 if os.path.exists(font_path) else 11)
     pdf.ln(5)
 
     col_w = [40, 150]
@@ -83,12 +84,14 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map):
     pdf.cell(col_w[0], 10, "실시요일-수업시수", 1, 0, 'C'); pdf.cell(col_w[1], 10, f" {', '.join(days_text)}", 1, 1, 'L')
     pdf.ln(2)
 
+    # 테이블 헤더
     pdf.set_fill_color(240, 240, 240)
     cols = [15, 40, 25, 30, 40, 40]
     headers = ["연번", "날짜", "요일", "수업시수", "강사료(원)", "비고"]
     for i, h in enumerate(headers): pdf.cell(cols[i], 10, h, 1, 0, 'C', fill=True)
     pdf.ln()
 
+    # 데이터 행 (최대 12줄)
     row_count, total_h, total_pay = 0, 0, 0
     for d in sorted(worked_dates):
         row_count += 1
@@ -114,7 +117,7 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map):
     
     return bytes(pdf.output())
 
-# --- 3. 사이드바 ---
+# --- 3. 사이드바 (등록/수정) ---
 with st.sidebar:
     st.header("👤 강사 관리")
     mode = st.radio("작업", ["등록/수정", "공통제외일정"])
@@ -163,33 +166,41 @@ for _, ex in st.session_state.excl_df.iterrows():
         while s <= e: all_excl_common.add(s); s += timedelta(days=1)
     except: continue
 
-# 소요액 합산
-grand_total = 0
-if not st.session_state.ins_df.empty:
-    for _, ins in st.session_state.ins_df.iterrows():
-        hm_all = {0: int(ins['mon']), 1: int(ins['tue']), 2: int(ins['wed']), 3: int(ins['thu']), 4: int(ins['fri'])}
-        curr = date(2026, 3, 1)
-        while curr <= date(2026, 12, 31):
-            if curr.weekday() < 5 and curr not in all_excl_common: grand_total += hm_all.get(curr.weekday(), 0) * int(ins['rate'])
-            curr += timedelta(days=1)
-        t_aft = st.session_state.after_df[st.session_state.after_df['name'] == ins['name']]
-        grand_total += int(t_aft[['w1','w2','w3','w4','w5']].sum().sum() * ins.get('rate_after', 50000))
-st.metric("✅ 2026년 전체 소요 예산", f"{grand_total:,}원")
+col_e, col_b = st.columns([0.6, 0.4])
+with col_e:
+    with st.expander("🗓️ 공통 제외 일정 관리"):
+        edited_ex = st.data_editor(st.session_state.excl_df, num_rows="dynamic", use_container_width=True)
+        if st.button("공통 일정 저장"):
+            st.session_state.excl_df = edited_ex
+            conn.update(worksheet="Exclusions", data=edited_ex); st.rerun()
+with col_b:
+    grand_total = 0
+    if not st.session_state.ins_df.empty:
+        for _, ins in st.session_state.ins_df.iterrows():
+            hm_all = {0: int(ins['mon']), 1: int(ins['tue']), 2: int(ins['wed']), 3: int(ins['thu']), 4: int(ins['fri'])}
+            curr = date(2026, 3, 1)
+            while curr <= date(2026, 12, 31):
+                if curr.weekday() < 5 and curr not in all_excl_common: grand_total += hm_all.get(curr.weekday(), 0) * int(ins['rate'])
+                curr += timedelta(days=1)
+            t_aft = st.session_state.after_df[st.session_state.after_df['name'] == ins['name']]
+            grand_total += int(t_aft[['w1','w2','w3','w4','w5']].sum().sum() * ins.get('rate_after', 50000))
+    st.metric("✅ 2026년 전체 소요 예산", f"{grand_total:,}원")
+
 st.divider()
 
-# --- 5. 상세 리포트 및 달력 ---
+# --- 5. 상세 리포트 및 월별 달력/입력 ---
 if not st.session_state.ins_df.empty:
     target = st.selectbox("조회 강사 선택", st.session_state.ins_df['name'].unique())
     ins_row = st.session_state.ins_df[st.session_state.ins_df['name'] == target].iloc[-1]
     hm = {0: int(ins_row['mon']), 1: int(ins_row['tue']), 2: int(ins_row['wed']), 3: int(ins_row['thu']), 4: int(ins_row['fri'])}
     
-    # 개인 일정
+    # 개인 일정 관리
     st.subheader(f"📍 {target} 강사 개인 일정")
     c_i1, c_i2 = st.columns([0.5, 0.5])
     with c_i1:
         with st.form(f"indiv_{target}"):
             in_d = st.date_input("날짜"); in_t = st.selectbox("구분", ["개인휴무", "추가출근"]); in_n = st.text_input("사유")
-            if st.form_submit_button("추가"):
+            if st.form_submit_button("개인 일정 추가"):
                 new_i = pd.DataFrame([{"name":target, "date":in_d.isoformat(), "type":in_t, "note":in_n}])
                 st.session_state.excl_indiv_df = pd.concat([st.session_state.excl_indiv_df, new_i], ignore_index=True)
                 conn.update(worksheet="Exclusions_Indiv", data=st.session_state.excl_indiv_df); st.rerun()
@@ -202,9 +213,11 @@ if not st.session_state.ins_df.empty:
             st.session_state.excl_indiv_df = pd.concat([others, edited_ind], ignore_index=True)
             conn.update(worksheet="Exclusions_Indiv", data=st.session_state.excl_indiv_df); st.rerun()
 
-    # 방과후 데이터 및 수업일 계산
+    # 방과후 데이터 로드
     target_aft_data = st.session_state.after_df[st.session_state.after_df['name'] == target]
     cur_aft_df = target_aft_data.copy().reset_index(drop=True) if not target_aft_data.empty else get_initial_after_df(target)
+
+    # 툴팁 및 수업일 계산
     tips = {d: HOLIDAYS_DICT[d] for d in HOLIDAYS_DICT}
     for _, ex in st.session_state.excl_df.iterrows():
         try:
@@ -216,31 +229,34 @@ if not st.session_state.ins_df.empty:
         d = date.fromisoformat(str(ex['date']))
         if ex['type'] == '개인휴무': tips[d] = f"[개인휴무] {ex['note']}"
         else: indiv_adds.add(d); tips[d] = f"[추가출근] {ex['note']}"
-    work_dates = [d for d in [date(2026,3,1) + timedelta(n) for n in range(306)] if (d.weekday() < 5 and d not in tips and d not in indiv_adds and hm.get(d.weekday(), 0) > 0) or (d in indiv_adds)]
 
-    st.subheader(f"📊 {target} 강사 상세 리포트")
+    work_dates = [d for d in [date(2026,3,1) + timedelta(n) for n in range(306)] 
+                  if (d.weekday() < 5 and d not in tips and d not in indiv_adds and hm.get(d.weekday(), 0) > 0) or (d in indiv_adds)]
+
+    st.subheader(f"📊 {target} 강사 상세 리포트 (방과후 입력 및 양식 출력)")
     cols = st.columns(2)
+    m_stats = []
     total_reg_h, total_aft_h, total_att = 0, 0, 0
 
     for m in range(3, 13):
         with cols[(m-3)%2]:
             m_label = f"{m}월"
             r_idx = cur_aft_df[cur_aft_df['month'] == m_label].index[0]
+            
+            # --- 레이아웃 개선: 달력(0.7) | 입력&버튼(0.3) ---
             st.write(f"#### 🗓️ {m_label}")
             cal_c, aft_c = st.columns([0.65, 0.35])
             
             with aft_c:
-                st.caption("방과후 시수(주차)")
+                st.caption("방과후 시수(주차별)")
                 wa = [st.number_input(f"{m}월 {i+1}주", value=int(cur_aft_df.at[r_idx, f'w{i+1}']), step=1, key=f"w{i+1}_{target}_{m}") for i in range(5)]
                 cur_aft_df.loc[r_idx, ['w1','w2','w3','w4','w5']] = wa
                 
-                # [PDF 생성 및 파일명 적용]
+                # PDF 출력 버튼 (방과후 제외, 정규 전용)
                 m_work_dates = sorted([d for d in work_dates if d.month == m])
                 if st.button(f"📄 {m}월 양식 PDF 생성", key=f"btn_{m}"):
                     pdf_data = create_monthly_pdf(ins_row, m_label, m_work_dates, hm)
-                    # 파일명 요청사항 반영
-                    f_name = f"2026학년도 {m_label} {ins_row.get('subject', '')} 시간강사({target}선생님) 수업 현황.pdf"
-                    st.download_button(f"⬇️ PDF 다운로드", pdf_data, f_name, "application/pdf", key=f"dl_{m}")
+                    st.download_button(f"⬇️ {m}월 PDF 다운로드", pdf_data, f"2026_{m}월_확인서_{target}.pdf", "application/pdf", key=f"dl_{m}")
 
             with cal_c:
                 cal = calendar.monthcalendar(2026, m)
