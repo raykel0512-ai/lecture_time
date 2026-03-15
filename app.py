@@ -204,7 +204,7 @@ if not st.session_state.ins_df.empty:
                     week = cal[w_idx]
                     html += '<tr>'
                     wrh = 0
-                    for i in range(5):
+                    for i in range(6):
                         day = week[i]
                         if day == 0: html += '<td></td>'
                         else:
