@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v17.0 - st.columns 언패킹 None 출력 제거")
+st.sidebar.info("✅ v18.0 - with 블록 제거, 컬럼 인덱스 방식으로 None 완전 제거")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -391,45 +391,49 @@ if not st.session_state.ins_df.empty:
             cal = calendar.monthcalendar(2026, m)
             st.markdown(f"#### 🗓️ {m_l}")
             r_idx = cur_aft[cur_aft['month'] == m_l].index[0]
-            col_cc, col_ac = st.columns([0.8, 0.2])
-            with col_ac:
-                st.caption("방과후 시수")
-                wa = []
-                for i in range(len(cal)):
-                    cn = f'w{i+1}'
-                    val = int(cur_aft.at[r_idx, cn]) if cn in cur_aft.columns else 0
-                    wi = st.number_input(f"{m}월{i+1}주", value=val, step=1, key=f"w{i+1}_{target}_{m}")
-                    wa.append(wi)
-                cur_aft.loc[r_idx, [f'w{i+1}' for i in range(len(cal))]] = wa
-                mw = sorted([d for d in work_dates if d.month == m])
-                if st.button(f"📄 {m}월 양식 PDF", key=f"btn_{m}"):
-                    pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
-                    f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''))} 시간강사({target}선생님) 수업 현황.pdf"
-                    st.download_button(f"⬇️ 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
-            with col_cc:
-                html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
-                html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#666;">정규h</th><th style="color:#007bff;">통합h</th></tr>'
-                m_rc = 0
-                for w_idx, week in enumerate(cal):
-                    html += '<tr>'
-                    wh = 0
-                    for i in range(5):
-                        day = week[i]
-                        if day == 0: html += '<td></td>'
-                        else:
-                            d = date(2026, m, day); cls, t = "", ""
-                            if d in work_dates: 
-                                cls = "background:#90EE90; font-weight:bold;"; wh += hm.get(d.weekday(), 0); m_rc += 1
-                                if d in adds: cls = "background:#add8e6; font-weight:bold;"
-                            elif d in tips:
-                                cls = "background:#FFB6C1; cursor:help;"
-                                # ✅ 수정 9: 툴팁에 None 대신 안전한 문자열만 표시
-                                tip_text = safe_str(tips.get(d), '')
-                                t = f'title="{tip_text}"' if tip_text else ''
-                            html += f'<td style="border:1px solid #ddd; padding:4px; {cls}" {t}>{day}</td>'
-                    html += f'<td style="border:1px solid #ddd; background:#f9f9f9; color:#666;">{int(wh)}</td>'
-                    html += f'<td style="border:1px solid #ddd; background:#eef6ff; font-weight:bold; color:#007bff;">{int(wh + wa[w_idx])}</td></tr>'
-                st.markdown(html + '</table>', unsafe_allow_html=True)
+            inner_cols = st.columns([0.8, 0.2])
+
+            # 오른쪽 컬럼: 방과후 시수 입력
+            inner_cols[1].caption("방과후 시수")
+            wa = []
+            for i in range(len(cal)):
+                cn = f'w{i+1}'
+                val = int(cur_aft.at[r_idx, cn]) if cn in cur_aft.columns else 0
+                wi = inner_cols[1].number_input(f"{m}월{i+1}주", value=val, step=1, key=f"w{i+1}_{target}_{m}")
+                wa.append(wi)
+            cur_aft.loc[r_idx, [f'w{i+1}' for i in range(len(cal))]] = wa
+            mw = sorted([d for d in work_dates if d.month == m])
+            if inner_cols[1].button(f"📄 {m}월 양식 PDF", key=f"btn_{m}"):
+                pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
+                f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''))} 시간강사({target}선생님) 수업 현황.pdf"
+                inner_cols[1].download_button(f"⬇️ 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
+
+            # 왼쪽 컬럼: 달력 HTML
+            html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
+            html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#666;">정규h</th><th style="color:#007bff;">통합h</th></tr>'
+            m_rc = 0
+            for w_idx, week in enumerate(cal):
+                html += '<tr>'
+                wh = 0
+                for i in range(5):
+                    day = week[i]
+                    if day == 0: html += '<td></td>'
+                    else:
+                        d = date(2026, m, day)
+                        cls, t = "", ""
+                        if d in work_dates:
+                            cls = "background:#90EE90; font-weight:bold;"
+                            wh += hm.get(d.weekday(), 0)
+                            m_rc += 1
+                            if d in adds: cls = "background:#add8e6; font-weight:bold;"
+                        elif d in tips:
+                            cls = "background:#FFB6C1; cursor:help;"
+                            tip_text = safe_str(tips.get(d), '')
+                            t = f'title="{tip_text}"' if tip_text else ''
+                        html += f'<td style="border:1px solid #ddd; padding:4px; {cls}" {t}>{day}</td>'
+                html += f'<td style="border:1px solid #ddd; background:#f9f9f9; color:#666;">{int(wh)}</td>'
+                html += f'<td style="border:1px solid #ddd; background:#eef6ff; font-weight:bold; color:#007bff;">{int(wh + wa[w_idx])}</td></tr>'
+            inner_cols[0].markdown(html + '</table>', unsafe_allow_html=True)
             m_ah, m_rh = sum(wa), sum([hm.get(d.weekday(), 0) for d in mw])
             m_rp, m_ap = m_rh * int(ins_row['rate']), m_ah * int(ins_row.get('rate_after', 50000))
             st.info(f"💰 {m}월 합계: {(m_rp + m_ap):,}원 (출근 {m_rc}일) | 정규 {int(m_rh)}h | 방과후 {int(m_ah)}h")
