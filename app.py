@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v15.0 - 월별 PDF 버튼 원복, None 추가 제거")
+st.sidebar.info("✅ v16.0 - cur_aft.at None 출력 제거")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -400,7 +400,7 @@ if not st.session_state.ins_df.empty:
                     val = int(cur_aft.at[r_idx, cn]) if cn in cur_aft.columns else 0
                     wi = st.number_input(f"{m}월{i+1}주", value=val, step=1, key=f"w{i+1}_{target}_{m}")
                     wa.append(wi)
-                    cur_aft.at[r_idx, cn] = wi
+                cur_aft.loc[r_idx, [f'w{i+1}' for i in range(len(cal))]] = wa
                 mw = sorted([d for d in work_dates if d.month == m])
                 if st.button(f"📄 {m}월 양식 PDF", key=f"btn_{m}"):
                     pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
