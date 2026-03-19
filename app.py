@@ -379,9 +379,9 @@ if not st.session_state.ins_df.empty:
     st.subheader(f"📊 {target} 선생님 상세 리포트")
     try:
         y_pdf = create_yearly_calendar_pdf(target, work_dates, tips, adds, hm, cur_aft)
-        st.download_button("📄 1년치 통합 달력 PDF 출력", y_pdf, f"2026_연간달력_{target}.pdf", "application/pdf")
+        _ = st.download_button("📄 1년치 통합 달력 PDF 출력", y_pdf, f"2026_연간달력_{target}.pdf", "application/pdf")
     except Exception as e:
-        st.caption(f"PDF 로딩 중... ({e})")
+        st.caption(f"연간 달력 PDF 생성 실패: {type(e).__name__}")
 
     cols = st.columns(2); t_reg_h, t_aft_h, t_att_d = 0, 0, 0
     for m in range(3, 13):
@@ -398,10 +398,12 @@ if not st.session_state.ins_df.empty:
                     wi = st.number_input(f"{m}월{i+1}주", value=val, step=1, key=f"w{i+1}_{target}_{m}")
                     wa.append(wi); cur_aft.at[r_idx, cn] = wi
                 mw = sorted([d for d in work_dates if d.month == m])
-                if st.button(f"📄 {m}월 양식 PDF", key=f"btn_{m}"):
+                try:
                     pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
                     f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''))} 시간강사({target}선생님) 수업 현황.pdf"
-                    st.download_button(f"⬇️ 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
+                    _ = st.download_button(f"📄 {m}월 양식 PDF 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
+                except Exception:
+                    st.caption(f"{m}월 PDF 생성 실패")
             with cc:
                 html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
                 html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#666;">정규h</th><th style="color:#007bff;">통합h</th></tr>'
