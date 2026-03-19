@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v21.0 - DEBUG 마커 삽입 (None 위치 특정용)")
+st.sidebar.info("✅ v22.0 - PDF 함수 삼항표현식 None 출력 제거")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -162,18 +162,30 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map):
 
 # --- 2-2. PDF 생성 함수 (2: 연간 통합 달력) ---
 def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_aft_df):
-    pdf = FPDF(); pdf.add_page()
+    pdf = FPDF()
+    pdf.add_page()
     font_path = "font.ttf"
-    if os.path.exists(font_path): pdf.add_font("Nanum", "", font_path); pdf.set_font("Nanum", size=14)
-    else: pdf.set_font("Arial", size=14)
-    
+    use_nanum = os.path.exists(font_path)
+    if use_nanum:
+        pdf.add_font("Nanum", "", font_path)
+        pdf.set_font("Nanum", size=14)
+    else:
+        pdf.set_font("Arial", size=14)
+
     pdf.cell(190, 10, txt=f"2026학년도 연간 수업 달력 ({target_name} 선생님)", ln=True, align='C')
     pdf.ln(5)
     for m in range(3, 13):
-        if (m-3) % 2 == 0 and m != 3: pdf.add_page()
-        pdf.set_font("Nanum", size=12) if os.path.exists(font_path) else pdf.set_font("Arial", size=12)
+        if (m-3) % 2 == 0 and m != 3:
+            pdf.add_page()
+        if use_nanum:
+            pdf.set_font("Nanum", size=12)
+        else:
+            pdf.set_font("Arial", size=12)
         pdf.cell(190, 10, txt=f"■ {m}월 일정", ln=True)
-        pdf.set_font("Nanum", size=9) if os.path.exists(font_path) else pdf.set_font("Arial", size=9)
+        if use_nanum:
+            pdf.set_font("Nanum", size=9)
+        else:
+            pdf.set_font("Arial", size=9)
         cal = calendar.monthcalendar(2026, m)
         headers = ["월", "화", "수", "목", "금", "정규h", "통합h"]
         col_w = [25, 25, 25, 25, 25, 30, 35]
@@ -375,14 +387,11 @@ if not st.session_state.ins_df.empty:
     ))
 
     st.subheader(f"📊 {target} 선생님 상세 리포트")
-    st.write("🔴 DEBUG_A")
-    st.write("🔴 DEBUG_B")
     try:
         y_pdf = create_yearly_calendar_pdf(target, work_dates, tips, adds, hm, cur_aft)
         _ = st.download_button("📄 1년치 통합 달력 PDF 출력", y_pdf, f"2026_연간달력_{target}.pdf", "application/pdf")
     except Exception as e:
         st.caption(f"연간 달력 PDF 생성 실패: {type(e).__name__}")
-    st.write("🔴 DEBUG_C")
 
     cols = st.columns(2)
     t_reg_h, t_aft_h, t_att_d = 0, 0, 0
