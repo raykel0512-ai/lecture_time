@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v20.0 - work_dates 암묵적 출력 None 제거")
+st.sidebar.info("✅ v21.0 - DEBUG 마커 삽입 (None 위치 특정용)")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -375,11 +375,14 @@ if not st.session_state.ins_df.empty:
     ))
 
     st.subheader(f"📊 {target} 선생님 상세 리포트")
+    st.write("🔴 DEBUG_A")
+    st.write("🔴 DEBUG_B")
     try:
         y_pdf = create_yearly_calendar_pdf(target, work_dates, tips, adds, hm, cur_aft)
         _ = st.download_button("📄 1년치 통합 달력 PDF 출력", y_pdf, f"2026_연간달력_{target}.pdf", "application/pdf")
     except Exception as e:
         st.caption(f"연간 달력 PDF 생성 실패: {type(e).__name__}")
+    st.write("🔴 DEBUG_C")
 
     cols = st.columns(2)
     t_reg_h, t_aft_h, t_att_d = 0, 0, 0
