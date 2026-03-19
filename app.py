@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v16.0 - cur_aft.at None 출력 제거")
+st.sidebar.info("✅ v17.0 - st.columns 언패킹 None 출력 제거")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -391,8 +391,8 @@ if not st.session_state.ins_df.empty:
             cal = calendar.monthcalendar(2026, m)
             st.markdown(f"#### 🗓️ {m_l}")
             r_idx = cur_aft[cur_aft['month'] == m_l].index[0]
-            cc, ac = st.columns([0.8, 0.2])
-            with ac:
+            col_cc, col_ac = st.columns([0.8, 0.2])
+            with col_ac:
                 st.caption("방과후 시수")
                 wa = []
                 for i in range(len(cal)):
@@ -406,7 +406,7 @@ if not st.session_state.ins_df.empty:
                     pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
                     f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''))} 시간강사({target}선생님) 수업 현황.pdf"
                     st.download_button(f"⬇️ 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
-            with cc:
+            with col_cc:
                 html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
                 html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#666;">정규h</th><th style="color:#007bff;">통합h</th></tr>'
                 m_rc = 0
