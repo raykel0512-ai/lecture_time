@@ -386,7 +386,7 @@ if not st.session_state.ins_df.empty:
     cols = st.columns(2); t_reg_h, t_aft_h, t_att_d = 0, 0, 0
     for m in range(3, 13):
         with cols[(m-3)%2]:
-            m_l = f"{m}월"; cal = calendar.monthcalendar(2026, m); st.write(f"#### 🗓️ {m_l}")
+            m_l = f"{m}월"; cal = calendar.monthcalendar(2026, m); st.markdown(f"#### 🗓️ {m_l}")
             r_idx = cur_aft[cur_aft['month'] == m_l].index[0]
             cc, ac = st.columns([0.8, 0.2])
             with ac:
@@ -427,7 +427,7 @@ if not st.session_state.ins_df.empty:
                             html += f'<td style="border:1px solid #ddd; padding:4px; {cls}" {t}>{day}</td>'
                     html += f'<td style="border:1px solid #ddd; background:#f9f9f9; color:#666;">{int(wh)}</td>'
                     html += f'<td style="border:1px solid #ddd; background:#eef6ff; font-weight:bold; color:#007bff;">{int(wh + wa[w_idx])}</td></tr>'
-                st.write(html + '</table>', unsafe_allow_html=True)
+                st.markdown(html + '</table>', unsafe_allow_html=True)
             m_ah, m_rh = sum(wa), sum([hm.get(d.weekday(), 0) for d in mw])
             m_rp, m_ap = m_rh * int(ins_row['rate']), m_ah * int(ins_row.get('rate_after', 50000))
             st.info(f"💰 {m}월 합계: {(m_rp + m_ap):,}원 (출근 {m_rc}일) | 정규 {int(m_rh)}h | 방과후 {int(m_ah)}h")
