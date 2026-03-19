@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v12.0 - None 제거 패치 완료")
+st.sidebar.info("✅ v14.0 - 세미콜론 구문 None 출력 전체 제거")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -383,10 +383,13 @@ if not st.session_state.ins_df.empty:
     except Exception as e:
         st.caption(f"연간 달력 PDF 생성 실패: {type(e).__name__}")
 
-    cols = st.columns(2); t_reg_h, t_aft_h, t_att_d = 0, 0, 0
+    cols = st.columns(2)
+    t_reg_h, t_aft_h, t_att_d = 0, 0, 0
     for m in range(3, 13):
         with cols[(m-3)%2]:
-            m_l = f"{m}월"; cal = calendar.monthcalendar(2026, m); st.markdown(f"#### 🗓️ {m_l}")
+            m_l = f"{m}월"
+            cal = calendar.monthcalendar(2026, m)
+            st.markdown(f"#### 🗓️ {m_l}")
             r_idx = cur_aft[cur_aft['month'] == m_l].index[0]
             cc, ac = st.columns([0.8, 0.2])
             with ac:
@@ -396,7 +399,8 @@ if not st.session_state.ins_df.empty:
                     cn = f'w{i+1}'
                     val = int(cur_aft.at[r_idx, cn]) if cn in cur_aft.columns else 0
                     wi = st.number_input(f"{m}월{i+1}주", value=val, step=1, key=f"w{i+1}_{target}_{m}")
-                    wa.append(wi); cur_aft.at[r_idx, cn] = wi
+                    wa.append(wi)
+                    cur_aft.at[r_idx, cn] = wi
                 mw = sorted([d for d in work_dates if d.month == m])
                 try:
                     pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
@@ -431,7 +435,9 @@ if not st.session_state.ins_df.empty:
             m_ah, m_rh = sum(wa), sum([hm.get(d.weekday(), 0) for d in mw])
             m_rp, m_ap = m_rh * int(ins_row['rate']), m_ah * int(ins_row.get('rate_after', 50000))
             st.info(f"💰 {m}월 합계: {(m_rp + m_ap):,}원 (출근 {m_rc}일) | 정규 {int(m_rh)}h | 방과후 {int(m_ah)}h")
-            t_reg_h+=m_rh; t_aft_h+=m_ah; t_att_d+=m_rc
+            t_reg_h += m_rh
+            t_aft_h += m_ah
+            t_att_d += m_rc
 
     st.divider()
     if st.button(f"💾 {target} 강사 시수 데이터 최종 저장"):
@@ -442,4 +448,7 @@ if not st.session_state.ins_df.empty:
 
     st.subheader("🏁 연간 최종 합계 요약")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("총 출근", f"{t_att_d}일"); c2.metric("정규 시수", f"{t_reg_h}h"); c3.metric("방과후 시수", f"{t_aft_h}h"); c4.metric("급여 합계", f"{int((t_reg_h*ins_row['rate'])+(t_aft_h*ins_row.get('rate_after',50000))):,}원")
+    c1.metric("총 출근", f"{t_att_d}일")
+    c2.metric("정규 시수", f"{t_reg_h}h")
+    c3.metric("방과후 시수", f"{t_aft_h}h")
+    c4.metric("급여 합계", f"{int((t_reg_h*ins_row['rate'])+(t_aft_h*ins_row.get('rate_after',50000))):,}원")
