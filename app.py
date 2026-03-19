@@ -9,11 +9,20 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-# 업데이트 확인용 (이 문구가 보이면 새 코드가 적용된 것입니다)
-st.sidebar.info("✅ v11.0 - None 제거 및 모든 기능 통합 완료")
+st.sidebar.info("✅ v12.0 - None 제거 패치 완료")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
+
+# ✅ 수정 1: None을 안전하게 문자열로 변환하는 헬퍼 함수 추가
+def safe_str(val, default="-"):
+    """None, NaN, 빈값을 모두 default로 치환"""
+    if val is None:
+        return default
+    if isinstance(val, float) and pd.isna(val):
+        return default
+    s = str(val).strip()
+    return s if s and s.lower() != "nan" and s.lower() != "none" else default
 
 # [기본 데이터 틀 생성 함수]
 def get_initial_after_df(target_name):
@@ -31,16 +40,43 @@ def load_all_data():
             if c in df_ins.columns:
                 df_ins[c] = pd.to_numeric(df_ins[c], errors='coerce').fillna(0).astype(int)
         
+        # ✅ 수정 2: 문자열 컬럼의 None/NaN을 빈 문자열로 치환
+        for c in ['name', 'subject', 'target_classes']:
+            if c in df_ins.columns:
+                df_ins[c] = df_ins[c].fillna('').astype(str).str.strip()
+        # 이름이 빈 행 제거 (GSheets 하단 빈 행 방지)
+        df_ins = df_ins[df_ins['name'] != ''].reset_index(drop=True)
+
         df_excl = conn.read(worksheet="Exclusions", ttl=0)
-        
+        # ✅ 수정 3: 제외일정의 note None 처리
+        if 'note' in df_excl.columns:
+            df_excl['note'] = df_excl['note'].fillna('').astype(str).str.strip()
+            df_excl['note'] = df_excl['note'].replace({'nan': '', 'None': ''})
+        for c in ['start_date', 'end_date']:
+            if c in df_excl.columns:
+                df_excl[c] = df_excl[c].fillna('').astype(str).str.strip()
+        df_excl = df_excl[df_excl['start_date'] != ''].reset_index(drop=True)
+
         df_aft = conn.read(worksheet="AfterSchool", ttl=0)
         for c in ['w1', 'w2', 'w3', 'w4', 'w5', 'w6']:
-            if c not in df_aft.columns: df_aft[c] = 0
+            if c not in df_aft.columns:
+                df_aft[c] = 0
             df_aft[c] = pd.to_numeric(df_aft[c], errors='coerce').fillna(0).astype(int)
             
         df_indiv = conn.read(worksheet="Exclusions_Indiv", ttl=0)
+        # ✅ 수정 4: 개인일정의 note/date None 처리
+        if not df_indiv.empty:
+            if 'note' in df_indiv.columns:
+                df_indiv['note'] = df_indiv['note'].fillna('').astype(str).str.strip()
+                df_indiv['note'] = df_indiv['note'].replace({'nan': '', 'None': ''})
+            for c in ['name', 'type', 'date']:
+                if c in df_indiv.columns:
+                    df_indiv[c] = df_indiv[c].fillna('').astype(str).str.strip()
+            df_indiv = df_indiv[df_indiv['date'] != ''].reset_index(drop=True)
+
         return df_ins, df_excl, df_aft, df_indiv
-    except:
+    except Exception as e:
+        st.warning(f"데이터 로드 오류: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # 데이터 할당
@@ -77,11 +113,12 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map):
     
     col_w = [40, 150]
     pdf.cell(col_w[0], 10, "성 명", 1, 0, 'C')
-    pdf.cell(col_w[1], 10, f" {target_row['name']}", 1, 1, 'L')
+    # ✅ 수정 5: PDF 출력 시에도 safe_str 적용
+    pdf.cell(col_w[1], 10, f" {safe_str(target_row['name'])}", 1, 1, 'L')
     pdf.cell(col_w[0], 10, "담당과목", 1, 0, 'C')
-    pdf.cell(col_w[1], 10, f" {target_row.get('subject', '-')}", 1, 1, 'L')
+    pdf.cell(col_w[1], 10, f" {safe_str(target_row.get('subject'))}", 1, 1, 'L')
     pdf.cell(col_w[0], 10, "담당학급", 1, 0, 'C')
-    pdf.cell(col_w[1], 10, f" {target_row.get('target_classes', '-')}", 1, 1, 'L')
+    pdf.cell(col_w[1], 10, f" {safe_str(target_row.get('target_classes'))}", 1, 1, 'L')
     
     m_int = int(month.replace('월',''))
     ld = calendar.monthrange(2026, m_int)[1]
@@ -196,8 +233,8 @@ with st.sidebar:
                 tn = st.selectbox("강사 선택", st.session_state.ins_df['name'].unique())
                 td = st.session_state.ins_df[st.session_state.ins_df['name'] == tn].iloc[0]
                 with st.form("edit"):
-                    esj = st.text_input("과목", td.get('subject',''))
-                    ecl = st.text_input("학급", td.get('target_classes',''))
+                    esj = st.text_input("과목", safe_str(td.get('subject', '')))
+                    ecl = st.text_input("학급", safe_str(td.get('target_classes', '')))
                     er = st.number_input("정규", int(td['rate']))
                     era = st.number_input("방과후", int(td.get('rate_after', 50000)))
                     em, et, ew, eth, ef = st.number_input("월", int(td['mon'])), st.number_input("화", int(td['tue'])), st.number_input("수", int(td['wed'])), st.number_input("목", int(td['thu'])), st.number_input("금", int(td['fri']))
@@ -210,11 +247,20 @@ with st.sidebar:
                         conn.update(worksheet="Instructors", data=st.session_state.ins_df)
                         st.rerun()
     else:
-        ex_r = st.date_input("공통 제외일", (date(2026,7,20), date(2026,8,20)))
-        if st.button("공통 제외 저장"):
-            new_ex = pd.DataFrame([{"start_date": ex_r[0].isoformat(), "end_date": ex_r[1].isoformat(), "note": st.text_input("사유")}])
-            st.session_state.excl_df = pd.concat([st.session_state.excl_df, new_ex], ignore_index=True)
-            st.rerun()
+        # ✅ 수정 6: 공통제외 사유 입력을 form 안으로 이동 (기존엔 버튼 콜백 밖에 있어서 항상 빈값 저장됨)
+        with st.form("excl_form"):
+            ex_r = st.date_input("공통 제외일", (date(2026,7,20), date(2026,8,20)))
+            ex_note = st.text_input("사유", "")
+            if st.form_submit_button("공통 제외 저장"):
+                if len(ex_r) == 2:
+                    new_ex = pd.DataFrame([{
+                        "start_date": ex_r[0].isoformat(),
+                        "end_date": ex_r[1].isoformat(),
+                        "note": ex_note if ex_note else ""
+                    }])
+                    st.session_state.excl_df = pd.concat([st.session_state.excl_df, new_ex], ignore_index=True)
+                    conn.update(worksheet="Exclusions", data=st.session_state.excl_df)
+                    st.rerun()
 
 # --- 4. 메인 대시보드 ---
 st.title("👨‍🏫 2026 강사 통합 관리 시스템 Pro")
@@ -242,8 +288,14 @@ with c_d2:
         for _, ins in st.session_state.ins_df.iterrows():
             ind_ex = set()
             if not st.session_state.excl_indiv_df.empty:
-                i_df = st.session_state.excl_indiv_df[(st.session_state.excl_indiv_df['name'] == ins['name']) & (st.session_state.excl_indiv_df['type'] == '개인휴무')]
-                ind_ex = {date.fromisoformat(str(d)) for d in i_df['date'].tolist()}
+                i_df = st.session_state.excl_indiv_df[
+                    (st.session_state.excl_indiv_df['name'] == ins['name']) &
+                    (st.session_state.excl_indiv_df['type'] == '개인휴무')
+                ]
+                for d_str in i_df['date'].tolist():
+                    try:
+                        ind_ex.add(date.fromisoformat(str(d_str)))
+                    except: continue
             hm_i = {0:int(ins['mon']), 1:int(ins['tue']), 2:int(ins['wed']), 3:int(ins['thu']), 4:int(ins['fri'])}
             curr_d = date(2026, 3, 1)
             while curr_d <= date(2026, 12, 31):
@@ -268,12 +320,15 @@ if not st.session_state.ins_df.empty:
             with st.form(f"ind_{target}"):
                 id_d, it_t, in_n = st.date_input("날짜"), st.selectbox("구분", ["개인휴무","추가출근"]), st.text_input("사유")
                 if st.form_submit_button("추가"):
-                    new_ind = pd.DataFrame([{"name":target,"date":id_d.isoformat(),"type":it_t,"note":in_n}])
+                    new_ind = pd.DataFrame([{"name":target,"date":id_d.isoformat(),"type":it_t,"note":in_n if in_n else ""}])
                     st.session_state.excl_indiv_df = pd.concat([st.session_state.excl_indiv_df, new_ind], ignore_index=True)
                     conn.update(worksheet="Exclusions_Indiv", data=st.session_state.excl_indiv_df)
                     st.rerun()
         with ci2:
-            t_ind_df = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name']==target]
+            t_ind_df = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name']==target].copy()
+            # ✅ 수정 7: t_ind_df note의 None 한 번 더 정리
+            if 'note' in t_ind_df.columns:
+                t_ind_df['note'] = t_ind_df['note'].fillna('').astype(str).replace({'nan':'','None':''})
             e_ind_df = st.data_editor(t_ind_df[['date','type','note']], num_rows="dynamic", key=f"e_{target}")
             if st.button("개인 일정 저장"):
                 others_ind = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name'] != target]
@@ -285,31 +340,48 @@ if not st.session_state.ins_df.empty:
     cur_aft = st.session_state.after_df[st.session_state.after_df['name']==target].copy().reset_index(drop=True)
     if cur_aft.empty: cur_aft = get_initial_after_df(target)
     
-    tips = {d:HOLIDAYS_DICT[d] for d in HOLIDAYS_DICT}
+    # ✅ 수정 8: tips 딕셔너리에 None이 절대 들어가지 않도록 safe_str 적용
+    tips = {d: safe_str(label, "공휴일") for d, label in HOLIDAYS_DICT.items()}
+
     for _, ex in st.session_state.excl_df.iterrows():
         try:
-            ts_d, te_d = date.fromisoformat(str(ex['start_date'])), date.fromisoformat(str(ex['end_date']))
+            ts_d = date.fromisoformat(str(ex['start_date']))
+            te_d = date.fromisoformat(str(ex['end_date']))
+            note_val = safe_str(ex.get('note'), "제외일")
             while ts_d <= te_d:
-                tips[ts_d] = ex['note']
+                tips[ts_d] = note_val
                 ts_d += timedelta(days=1)
         except: continue
     
+    # ✅ t_ind_df 재참조 안전하게 처리
+    t_ind_df = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name']==target].copy()
+    if 'note' in t_ind_df.columns:
+        t_ind_df['note'] = t_ind_df['note'].fillna('').astype(str).replace({'nan':'','None':''})
+
     adds = set()
     for _, ex in t_ind_df.iterrows():
         try:
             td_d = date.fromisoformat(str(ex['date']))
-            if ex['type']=='개인휴무': tips[td_d]=f"[개인] {ex['note']}"
-            else: adds.add(td_d); tips[td_d]=f"[추가] {ex['note']}"
+            note_val = safe_str(ex.get('note'), '')
+            if ex['type'] == '개인휴무':
+                tips[td_d] = f"[개인] {note_val}".strip()
+            else:
+                adds.add(td_d)
+                tips[td_d] = f"[추가] {note_val}".strip()
         except: continue
     
-    work_dates = [d for d in [date(2026,3,1) + timedelta(n) for n in range(306)] if (d.weekday() < 5 and d not in tips and d not in adds and hm.get(d.weekday(), 0) > 0) or (d in adds)]
+    work_dates = [
+        d for d in [date(2026,3,1) + timedelta(n) for n in range(306)]
+        if (d.weekday() < 5 and d not in tips and hm.get(d.weekday(), 0) > 0)
+        or (d in adds)
+    ]
 
     st.subheader(f"📊 {target} 선생님 상세 리포트")
-    # 연간 PDF 버튼
     try:
         y_pdf = create_yearly_calendar_pdf(target, work_dates, tips, adds, hm, cur_aft)
         st.download_button("📄 1년치 통합 달력 PDF 출력", y_pdf, f"2026_연간달력_{target}.pdf", "application/pdf")
-    except: st.caption("PDF 로딩 중...")
+    except Exception as e:
+        st.caption(f"PDF 로딩 중... ({e})")
 
     cols = st.columns(2); t_reg_h, t_aft_h, t_att_d = 0, 0, 0
     for m in range(3, 13):
@@ -328,7 +400,7 @@ if not st.session_state.ins_df.empty:
                 mw = sorted([d for d in work_dates if d.month == m])
                 if st.button(f"📄 {m}월 양식 PDF", key=f"btn_{m}"):
                     pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
-                    f_name = f"2026학년도 {m_l} {ins_row.get('subject', '')} 시간강사({target}선생님) 수업 현황.pdf"
+                    f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''))} 시간강사({target}선생님) 수업 현황.pdf"
                     st.download_button(f"⬇️ 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
             with cc:
                 html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
@@ -345,7 +417,11 @@ if not st.session_state.ins_df.empty:
                             if d in work_dates: 
                                 cls = "background:#90EE90; font-weight:bold;"; wh += hm.get(d.weekday(), 0); m_rc += 1
                                 if d in adds: cls = "background:#add8e6; font-weight:bold;"
-                            elif d in tips: cls = "background:#FFB6C1; cursor:help;"; t = f'title="{tips[d]}"'
+                            elif d in tips:
+                                cls = "background:#FFB6C1; cursor:help;"
+                                # ✅ 수정 9: 툴팁에 None 대신 안전한 문자열만 표시
+                                tip_text = safe_str(tips.get(d), '')
+                                t = f'title="{tip_text}"' if tip_text else ''
                             html += f'<td style="border:1px solid #ddd; padding:4px; {cls}" {t}>{day}</td>'
                     html += f'<td style="border:1px solid #ddd; background:#f9f9f9; color:#666;">{int(wh)}</td>'
                     html += f'<td style="border:1px solid #ddd; background:#eef6ff; font-weight:bold; color:#007bff;">{int(wh + wa[w_idx])}</td></tr>'
