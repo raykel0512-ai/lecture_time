@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v19.0 - 개인일정 컬럼 None 제거")
+st.sidebar.info("✅ v20.0 - work_dates 암묵적 출력 None 제거")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -369,11 +369,10 @@ if not st.session_state.ins_df.empty:
                 tips[td_d] = f"[추가] {note_val}".strip()
         except: continue
     
-    work_dates = [
-        d for d in [date(2026,3,1) + timedelta(n) for n in range(306)]
-        if (d.weekday() < 5 and d not in tips and hm.get(d.weekday(), 0) > 0)
-        or (d in adds)
-    ]
+    work_dates = list(filter(
+        lambda d: (d.weekday() < 5 and d not in tips and hm.get(d.weekday(), 0) > 0) or (d in adds),
+        [date(2026,3,1) + timedelta(n) for n in range(306)]
+    ))
 
     st.subheader(f"📊 {target} 선생님 상세 리포트")
     try:
