@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v14.0 - 세미콜론 구문 None 출력 전체 제거")
+st.sidebar.info("✅ v15.0 - 월별 PDF 버튼 원복, None 추가 제거")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -402,12 +402,10 @@ if not st.session_state.ins_df.empty:
                     wa.append(wi)
                     cur_aft.at[r_idx, cn] = wi
                 mw = sorted([d for d in work_dates if d.month == m])
-                try:
+                if st.button(f"📄 {m}월 양식 PDF", key=f"btn_{m}"):
                     pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm)
                     f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''))} 시간강사({target}선생님) 수업 현황.pdf"
-                    _ = st.download_button(f"📄 {m}월 양식 PDF 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
-                except Exception:
-                    st.caption(f"{m}월 PDF 생성 실패")
+                    st.download_button(f"⬇️ 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
             with cc:
                 html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
                 html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#666;">정규h</th><th style="color:#007bff;">통합h</th></tr>'
