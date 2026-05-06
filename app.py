@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v23.0 - PDF 함수 삼항표현식 None 출력 제거")
+st.sidebar.info("✅ v23.0 - 추가출근일 직접 시수 반영")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -197,15 +197,15 @@ def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_
         else:
             pdf.set_font("Arial", size=9)
         cal = calendar.monthcalendar(2026, m)
-        headers = ["월", "화", "수", "목", "금", "정규h", "통합h"]
-        col_w = [25, 25, 25, 25, 25, 30, 35]
+        headers = ["월", "화", "수", "목", "금", "토", "일", "정규h", "통합h"]
+        col_w = [20, 20, 20, 20, 20, 20, 20, 25, 25]
         pdf.set_fill_color(230, 230, 230)
         for i, h in enumerate(headers): pdf.cell(col_w[i], 8, h, 1, 0, 'C', fill=True)
         pdf.ln()
         m_rows = cur_aft_df[cur_aft_df['month'] == f"{m}월"]
         for w_idx, week in enumerate(cal):
             reg_h = 0
-            for i in range(5):
+            for i in range(7):
                 day = week[i]
                 fill = False
                 if day != 0:
@@ -225,9 +225,9 @@ def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_
                 col_name = f'w{w_idx+1}'
                 if col_name in m_rows.columns: aft_h = int(m_rows.iloc[0][col_name])
             pdf.set_fill_color(245, 245, 245)
-            pdf.cell(col_w[5], 8, f"{reg_h}h", 1, 0, 'C', fill=True)
+            pdf.cell(col_w[7], 8, f"{reg_h}h", 1, 0, 'C', fill=True)
             pdf.set_fill_color(238, 246, 255)
-            pdf.cell(col_w[6], 8, f"{reg_h + aft_h}h", 1, 1, 'C', fill=True)
+            pdf.cell(col_w[8], 8, f"{reg_h + aft_h}h", 1, 1, 'C', fill=True)
         pdf.ln(5)
     return bytes(pdf.output())
 
@@ -446,12 +446,12 @@ if not st.session_state.ins_df.empty:
 
             # 왼쪽 컬럼: 달력 HTML
             html = '<table style="width:100%; border-collapse:collapse; text-align:center; font-size:12px;">'
-            html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th style="color:#666;">정규h</th><th style="color:#007bff;">통합h</th></tr>'
+            html += '<tr style="background:#f0f2f6;"><th>월</th><th>화</th><th>수</th><th>목</th><th>금</th><th>토</th><th>일</th><th style="color:#666;">정규h</th><th style="color:#007bff;">통합h</th></tr>'
             m_rc = 0
             for w_idx, week in enumerate(cal):
                 html += '<tr>'
                 wh = 0
-                for i in range(5):
+                for i in range(7):
                     day = week[i]
                     if day == 0: html += '<td></td>'
                     else:
