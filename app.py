@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v23.0 - 추가출근일 직접 시수 반영")
+st.sidebar.info("✅ v23.1 - 추가출근 기본 시수 자동 적용")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -25,11 +25,23 @@ def safe_str(val, default="-"):
     return s if s and s.lower() != "nan" and s.lower() != "none" else default
 
 # ✅ 추가출근일은 원래 요일 시수 대신 사용자가 입력한 시수로 계산
+def get_default_additional_hours(work_date, weekday_hours):
+    weekday_default = int(weekday_hours.get(work_date.weekday(), 0))
+    if weekday_default > 0:
+        return weekday_default
+
+    positive_hours = [int(h) for h in weekday_hours.values() if int(h) > 0]
+    if not positive_hours:
+        return 0
+
+    return max(set(positive_hours), key=lambda h: (positive_hours.count(h), h))
+
 def get_regular_hours(work_date, weekday_hours, added_hours=None):
     if added_hours and work_date in added_hours:
         extra_hours = int(added_hours.get(work_date, 0))
         if extra_hours > 0:
             return extra_hours
+        return get_default_additional_hours(work_date, weekday_hours)
     return int(weekday_hours.get(work_date.weekday(), 0))
 
 # [기본 데이터 틀 생성 함수]
@@ -347,7 +359,7 @@ if not st.session_state.ins_df.empty:
             with st.form(f"ind_{target}"):
                 id_d = st.date_input("날짜")
                 it_t = st.selectbox("구분", ["개인휴무","추가출근"])
-                ih = st.number_input("추가출근 시수", min_value=0, value=int(hm.get(id_d.weekday(), 0)), step=1, help="추가출근일로 저장할 때 이 시수로 정규 시수를 계산합니다.")
+                ih = st.number_input("추가출근 시수", min_value=0, value=get_default_additional_hours(id_d, hm), step=1, help="원래 수업 요일이 아닌 날은 기존 요일별 시수 중 가장 많이 쓰는 시수를 기본값으로 넣습니다. 필요하면 직접 수정하세요.")
                 in_n = st.text_input("사유")
                 if st.form_submit_button("추가"):
                     new_ind = pd.DataFrame([{"name":target,"date":id_d.isoformat(),"type":it_t,"hours":int(ih) if it_t == "추가출근" else 0,"note":in_n if in_n else ""}])
