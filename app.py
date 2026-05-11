@@ -9,7 +9,7 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v23.2 - 달력 주말 열 숨김")
+st.sidebar.info("✅ v23.3 - 연간 PDF 3개월씩 출력")
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -197,7 +197,7 @@ def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_
     pdf.cell(190, 10, txt=f"2026학년도 연간 수업 달력 ({target_name} 선생님)", ln=True, align='C')
     pdf.ln(5)
     for m in range(3, 13):
-        if (m-3) % 2 == 0 and m != 3:
+        if (m-3) % 3 == 0 and m != 3:
             pdf.add_page()
         if use_nanum:
             pdf.set_font("Nanum", size=12)
@@ -498,7 +498,7 @@ if not st.session_state.ins_df.empty:
 
     st.subheader("🏁 연간 최종 합계 요약")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("총 출근", f"{t_att_d}일")
+    c1.metric("총 출근", f"{t_att_d}일")      
     c2.metric("정규 시수", f"{t_reg_h}h")
     c3.metric("방과후 시수", f"{t_aft_h}h")
     c4.metric("급여 합계", f"{int((t_reg_h*ins_row['rate'])+(t_aft_h*ins_row.get('rate_after',50000))):,}원")
