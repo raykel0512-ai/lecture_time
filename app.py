@@ -9,12 +9,20 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v23.3 - 연간 PDF 3개월씩 출력")
+st.sidebar.info("✅ v24.0 - 학기별 시수 분리 지원")
+
+# ✅ [신규] 2학기 시작 기준일 (이 날짜부터 2학기 시수 적용)
+#    7~8월은 방학 제외기간이라 그 사이 어느 날짜로 잡아도 결과는 동일합니다.
+SEMESTER2_START = date(2026, 8, 1)
+
+SEM1_COLS = ['mon', 'tue', 'wed', 'thu', 'fri']
+SEM2_COLS = ['mon2', 'tue2', 'wed2', 'thu2', 'fri2']
+DAY_LABELS = ['월', '화', '수', '목', '금']
 
 # [데이터 연결]
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# ✅ 수정 1: None을 안전하게 문자열로 변환하는 헬퍼 함수 추가
+
 def safe_str(val, default="-"):
     """None, NaN, 빈값을 모두 default로 치환"""
     if val is None:
@@ -24,7 +32,44 @@ def safe_str(val, default="-"):
     s = str(val).strip()
     return s if s and s.lower() != "nan" and s.lower() != "none" else default
 
-# ✅ 추가출근일은 원래 요일 시수 대신 사용자가 입력한 시수로 계산
+
+def _num(val, default=0):
+    """숫자로 변환, 실패 시 default"""
+    v = pd.to_numeric(val, errors='coerce')
+    if v is None or pd.isna(v):
+        return default
+    return int(v)
+
+
+def _num_or_none(val):
+    """숫자로 변환, 비어 있으면 None (미입력과 0을 구분하기 위함)"""
+    v = pd.to_numeric(val, errors='coerce')
+    if v is None or pd.isna(v):
+        return None
+    return int(v)
+
+
+# ✅ [신규] 2학기 시수가 따로 입력되어 있는지 판단
+def has_sem2(ins_row):
+    return any(_num_or_none(ins_row.get(c)) is not None for c in SEM2_COLS)
+
+
+# ✅ [신규] 날짜(또는 학기)에 맞는 요일별 시수 맵을 반환
+#    2학기 값이 비어 있으면 1학기 값을 그대로 사용 (기존 강사 데이터 무수정 호환)
+def get_hours_map(ins_row, work_date=None, semester=1):
+    if work_date is not None:
+        semester = 2 if work_date >= SEMESTER2_START else 1
+    if semester == 2 and has_sem2(ins_row):
+        return {i: _num(ins_row.get(SEM2_COLS[i]), 0) for i in range(5)}
+    return {i: _num(ins_row.get(SEM1_COLS[i]), 0) for i in range(5)}
+
+
+def hours_map_label(ins_row, semester):
+    hm = get_hours_map(ins_row, semester=semester)
+    return " ".join(f"{DAY_LABELS[i]}{hm.get(i, 0)}" for i in range(5))
+
+
+# 추가출근일은 원래 요일 시수 대신 사용자가 입력한 시수로 계산
 def get_default_additional_hours(work_date, weekday_hours):
     weekday_default = int(weekday_hours.get(work_date.weekday(), 0))
     if weekday_default > 0:
@@ -36,13 +81,17 @@ def get_default_additional_hours(work_date, weekday_hours):
 
     return max(set(positive_hours), key=lambda h: (positive_hours.count(h), h))
 
-def get_regular_hours(work_date, weekday_hours, added_hours=None):
+
+# ✅ [변경] 요일 시수 맵 대신 강사 행(ins_row)을 받아 날짜별 학기를 자동 판별
+def get_regular_hours(work_date, ins_row, added_hours=None):
+    hm = get_hours_map(ins_row, work_date)
     if added_hours and work_date in added_hours:
         extra_hours = int(added_hours.get(work_date, 0))
         if extra_hours > 0:
             return extra_hours
-        return get_default_additional_hours(work_date, weekday_hours)
-    return int(weekday_hours.get(work_date.weekday(), 0))
+        return get_default_additional_hours(work_date, hm)
+    return int(hm.get(work_date.weekday(), 0))
+
 
 # [기본 데이터 틀 생성 함수]
 def get_initial_after_df(target_name):
@@ -52,15 +101,22 @@ def get_initial_after_df(target_name):
         "w1": [0]*10, "w2": [0]*10, "w3": [0]*10, "w4": [0]*10, "w5": [0]*10, "w6": [0]*10
     })
 
+
 # [데이터 로드 함수]
 def load_all_data():
     try:
         df_ins = conn.read(worksheet="Instructors", ttl=0)
-        for c in ['rate', 'rate_after', 'mon', 'tue', 'wed', 'thu', 'fri']:
+        for c in ['rate', 'rate_after'] + SEM1_COLS:
             if c in df_ins.columns:
                 df_ins[c] = pd.to_numeric(df_ins[c], errors='coerce').fillna(0).astype(int)
-        
-        # ✅ 수정 2: 문자열 컬럼의 None/NaN을 빈 문자열로 치환
+
+        # ✅ [신규] 2학기 시수 컬럼 — 빈칸은 빈 문자열로 유지해서 "미입력"과 "0"을 구분
+        for c in SEM2_COLS:
+            if c not in df_ins.columns:
+                df_ins[c] = ''
+            parsed = pd.to_numeric(df_ins[c], errors='coerce')
+            df_ins[c] = parsed.apply(lambda v: '' if pd.isna(v) else str(int(v)))
+
         for c in ['name', 'subject', 'target_classes']:
             if c in df_ins.columns:
                 df_ins[c] = df_ins[c].fillna('').astype(str).str.strip()
@@ -68,7 +124,6 @@ def load_all_data():
         df_ins = df_ins[df_ins['name'] != ''].reset_index(drop=True)
 
         df_excl = conn.read(worksheet="Exclusions", ttl=0)
-        # ✅ 수정 3: 제외일정의 note None 처리
         if 'note' in df_excl.columns:
             df_excl['note'] = df_excl['note'].fillna('').astype(str).str.strip()
             df_excl['note'] = df_excl['note'].replace({'nan': '', 'None': ''})
@@ -82,12 +137,11 @@ def load_all_data():
             if c not in df_aft.columns:
                 df_aft[c] = 0
             df_aft[c] = pd.to_numeric(df_aft[c], errors='coerce').fillna(0).astype(int)
-            
+
         df_indiv = conn.read(worksheet="Exclusions_Indiv", ttl=0)
         for c in ['name', 'date', 'type', 'hours', 'note']:
             if c not in df_indiv.columns:
                 df_indiv[c] = 0 if c == 'hours' else ''
-        # ✅ 수정 4: 개인일정의 note/date None 처리
         if not df_indiv.empty:
             df_indiv['note'] = df_indiv['note'].fillna('').astype(str).str.strip()
             df_indiv['note'] = df_indiv['note'].replace({'nan': '', 'None': ''})
@@ -101,6 +155,7 @@ def load_all_data():
         st.warning(f"데이터 로드 오류: {e}")
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+
 # 데이터 할당
 if 'ins_df' not in st.session_state:
     i_raw, e_raw, a_raw, ind_raw = load_all_data()
@@ -110,15 +165,16 @@ if 'ins_df' not in st.session_state:
     st.session_state.excl_indiv_df = ind_raw
 
 HOLIDAYS_DICT = {
-    date(2026,3,1): "삼일절", date(2026,3,2): "대체공휴일", date(2026,5,5): "어린이날", 
-    date(2026,5,24): "부처님오신날", date(2026,5,25): "대체공휴일", date(2026,6,6): "현충일", 
-    date(2026,8,15): "광복절", date(2026,8,17): "대체공휴일", date(2026,9,24): "추석", 
+    date(2026,3,1): "삼일절", date(2026,3,2): "대체공휴일", date(2026,5,5): "어린이날",
+    date(2026,5,24): "부처님오신날", date(2026,5,25): "대체공휴일", date(2026,6,6): "현충일",
+    date(2026,8,15): "광복절", date(2026,8,17): "대체공휴일", date(2026,9,24): "추석",
     date(2026,9,25): "추석", date(2026,9,26): "추석", date(2026,9,28): "대체공휴일",
     date(2026,10,3): "개천절", date(2026,10,9): "한글날", date(2026,12,25): "성탄절"
 }
 
+
 # --- 2. PDF 생성 함수 (1: 월별 확인서) ---
-def create_monthly_pdf(target_row, month, worked_dates, h_map, added_hours=None):
+def create_monthly_pdf(target_row, month, worked_dates, added_hours=None):
     pdf = FPDF()
     pdf.add_page()
     font_path = "font.ttf"
@@ -127,26 +183,25 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map, added_hours=None)
         pdf.set_font("Nanum", size=11)
     else:
         pdf.set_font("Arial", size=11)
-    
+
     pdf.set_font("Nanum", size=18) if os.path.exists(font_path) else pdf.set_font("Arial", size=18)
     pdf.cell(190, 15, txt=f"2026학년도 {month} 시간강사 수업 현황", ln=True, align='C')
     pdf.set_font("Nanum", size=11) if os.path.exists(font_path) else pdf.set_font("Arial", size=11)
     pdf.ln(5)
-    
+
     col_w = [40, 150]
     pdf.cell(col_w[0], 10, "성 명", 1, 0, 'C')
-    # ✅ 수정 5: PDF 출력 시에도 safe_str 적용
     pdf.cell(col_w[1], 10, f" {safe_str(target_row['name'])}", 1, 1, 'L')
     pdf.cell(col_w[0], 10, "담당과목", 1, 0, 'C')
     pdf.cell(col_w[1], 10, f" {safe_str(target_row.get('subject'))}", 1, 1, 'L')
     pdf.cell(col_w[0], 10, "담당학급", 1, 0, 'C')
     pdf.cell(col_w[1], 10, f" {safe_str(target_row.get('target_classes'))}", 1, 1, 'L')
-    
+
     m_int = int(month.replace('월',''))
     ld = calendar.monthrange(2026, m_int)[1]
     pdf.cell(col_w[0], 10, "기 간", 1, 0, 'C')
     pdf.cell(col_w[1], 10, f" 2026. {str(m_int).zfill(2)}. 01. ~ 2026. {str(m_int).zfill(2)}. {ld}.", 1, 1, 'L')
-    
+
     pdf.ln(2)
     pdf.set_fill_color(240, 240, 240)
     cols = [15, 40, 25, 30, 40, 40]
@@ -154,12 +209,12 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map, added_hours=None)
     for i, h in enumerate(headers):
         pdf.cell(cols[i], 10, h, 1, 0, 'C', fill=True)
     pdf.ln()
-    
+
     rc, th, tp = 0, 0, 0
     dk = ["월", "화", "수", "목", "금", "토", "일"]
     for d in sorted(worked_dates):
         rc += 1
-        h = get_regular_hours(d, h_map, added_hours)
+        h = get_regular_hours(d, target_row, added_hours)
         p = h * int(target_row['rate'])
         pdf.cell(cols[0], 8, str(rc), 1, 0, 'C')
         pdf.cell(cols[1], 8, d.strftime("%m월 %d일"), 1, 0, 'C')
@@ -173,7 +228,7 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map, added_hours=None)
         rc += 1
         for i in range(6):
             pdf.cell(cols[i], 8, "", 1, (1 if i==5 else 0), 'C')
-    
+
     pdf.set_fill_color(255, 255, 153)
     pdf.cell(cols[0]+cols[1], 10, "합계", 1, 0, 'C', fill=True)
     pdf.cell(cols[2], 10, f"{len(worked_dates)}일", 1, 0, 'C', fill=True)
@@ -182,8 +237,10 @@ def create_monthly_pdf(target_row, month, worked_dates, h_map, added_hours=None)
     pdf.cell(cols[5], 10, "", 1, 1, 'C', fill=True)
     return bytes(pdf.output())
 
+
 # --- 2-2. PDF 생성 함수 (2: 연간 통합 달력) ---
-def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_aft_df, added_hours=None):
+def create_yearly_calendar_pdf(ins_row, work_dates, tips, ind_adds, cur_aft_df, added_hours=None):
+    target_name = safe_str(ins_row['name'], "")
     pdf = FPDF()
     pdf.add_page()
     font_path = "font.ttf"
@@ -223,7 +280,7 @@ def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_
                 if day != 0:
                     d = date(2026, m, day)
                     if d in work_dates:
-                        reg_h += get_regular_hours(d, hm, added_hours)
+                        reg_h += get_regular_hours(d, ins_row, added_hours)
                         fill = True
                         if d in ind_adds: pdf.set_fill_color(173, 216, 230)
                         else: pdf.set_fill_color(144, 238, 144)
@@ -231,7 +288,7 @@ def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_
                         pdf.set_fill_color(255, 182, 193)
                         fill = True
                 pdf.cell(col_w[i], 8, str(day) if day != 0 else "", 1, 0, 'C', fill=fill)
-            
+
             aft_h = 0
             if not m_rows.empty:
                 col_name = f'w{w_idx+1}'
@@ -243,9 +300,11 @@ def create_yearly_calendar_pdf(target_name, work_dates, tips, ind_adds, hm, cur_
         pdf.ln(5)
     return bytes(pdf.output())
 
+
 # --- 3. 사이드바 (등록/수정) ---
 with st.sidebar:
     st.header("👤 강사 관리")
+    st.caption(f"2학기 시작 기준일: {SEMESTER2_START.isoformat()}")
     mode = st.radio("작업", ["등록/수정", "공통제외"])
     if mode == "등록/수정":
         sub = st.selectbox("구분", ["신규 등록", "수정/삭제"])
@@ -254,11 +313,35 @@ with st.sidebar:
                 n = st.text_input("강사 이름")
                 subj = st.text_input("담당 과목", "통합과학")
                 cl = st.text_input("학급", "1학년 1반 ~ 8반")
-                r = st.number_input("정규 단가", value=25000)
-                ra = st.number_input("방과후 단가", value=50000)
-                m, t, w, th, f = st.number_input("월", 0), st.number_input("화", 0), st.number_input("수", 0), st.number_input("목", 0), st.number_input("금", 0)
+                r = st.number_input("정규 단가", value=25000, step=1000)
+                ra = st.number_input("방과후 단가", value=50000, step=1000)
+
+                st.markdown("**1학기 요일별 시수**")
+                m = st.number_input("월", value=0, step=1, key="add_mon")
+                t = st.number_input("화", value=0, step=1, key="add_tue")
+                w = st.number_input("수", value=0, step=1, key="add_wed")
+                th = st.number_input("목", value=0, step=1, key="add_thu")
+                f = st.number_input("금", value=0, step=1, key="add_fri")
+
+                # ✅ [신규] 2학기 시수
+                use_s2 = st.checkbox("2학기 시수 따로 지정", value=False, key="add_use_s2")
+                st.caption("체크하지 않으면 2학기에도 1학기 시수를 그대로 적용합니다. "
+                           "1학기 전용 강사는 체크 후 아래를 모두 0으로 두세요.")
+                m2 = st.number_input("월(2학기)", value=0, step=1, key="add_mon2")
+                t2 = st.number_input("화(2학기)", value=0, step=1, key="add_tue2")
+                w2 = st.number_input("수(2학기)", value=0, step=1, key="add_wed2")
+                th2 = st.number_input("목(2학기)", value=0, step=1, key="add_thu2")
+                f2 = st.number_input("금(2학기)", value=0, step=1, key="add_fri2")
+
                 if st.form_submit_button("저장"):
-                    new = pd.DataFrame([{"name":n,"rate":r,"rate_after":ra,"mon":m,"tue":t,"wed":w,"thu":th,"fri":f, "subject":subj, "target_classes":cl}])
+                    s2_vals = [str(int(v)) for v in [m2, t2, w2, th2, f2]] if use_s2 else ['']*5
+                    new = pd.DataFrame([{
+                        "name": n, "rate": r, "rate_after": ra,
+                        "mon": m, "tue": t, "wed": w, "thu": th, "fri": f,
+                        "mon2": s2_vals[0], "tue2": s2_vals[1], "wed2": s2_vals[2],
+                        "thu2": s2_vals[3], "fri2": s2_vals[4],
+                        "subject": subj, "target_classes": cl
+                    }])
                     st.session_state.ins_df = pd.concat([st.session_state.ins_df, new], ignore_index=True)
                     conn.update(worksheet="Instructors", data=st.session_state.ins_df)
                     st.rerun()
@@ -266,14 +349,38 @@ with st.sidebar:
             if not st.session_state.ins_df.empty:
                 tn = st.selectbox("강사 선택", st.session_state.ins_df['name'].unique())
                 td = st.session_state.ins_df[st.session_state.ins_df['name'] == tn].iloc[0]
+                td_s2 = get_hours_map(td, semester=2)
                 with st.form("edit"):
-                    esj = st.text_input("과목", safe_str(td.get('subject', '')))
-                    ecl = st.text_input("학급", safe_str(td.get('target_classes', '')))
-                    er = st.number_input("정규", int(td['rate']))
-                    era = st.number_input("방과후", int(td.get('rate_after', 50000)))
-                    em, et, ew, eth, ef = st.number_input("월", int(td['mon'])), st.number_input("화", int(td['tue'])), st.number_input("수", int(td['wed'])), st.number_input("목", int(td['thu'])), st.number_input("금", int(td['fri']))
+                    esj = st.text_input("과목", safe_str(td.get('subject', ''), ''))
+                    ecl = st.text_input("학급", safe_str(td.get('target_classes', ''), ''))
+                    er = st.number_input("정규", value=_num(td.get('rate'), 25000), step=1000)
+                    era = st.number_input("방과후", value=_num(td.get('rate_after'), 50000), step=1000)
+
+                    st.markdown("**1학기 요일별 시수**")
+                    em = st.number_input("월", value=_num(td.get('mon')), step=1, key="ed_mon")
+                    et = st.number_input("화", value=_num(td.get('tue')), step=1, key="ed_tue")
+                    ew = st.number_input("수", value=_num(td.get('wed')), step=1, key="ed_wed")
+                    eth = st.number_input("목", value=_num(td.get('thu')), step=1, key="ed_thu")
+                    ef = st.number_input("금", value=_num(td.get('fri')), step=1, key="ed_fri")
+
+                    # ✅ [신규] 2학기 시수
+                    e_use_s2 = st.checkbox("2학기 시수 따로 지정", value=has_sem2(td), key="ed_use_s2")
+                    st.caption("체크 해제 시 2학기에도 1학기 시수를 적용합니다.")
+                    em2 = st.number_input("월(2학기)", value=td_s2[0], step=1, key="ed_mon2")
+                    et2 = st.number_input("화(2학기)", value=td_s2[1], step=1, key="ed_tue2")
+                    ew2 = st.number_input("수(2학기)", value=td_s2[2], step=1, key="ed_wed2")
+                    eth2 = st.number_input("목(2학기)", value=td_s2[3], step=1, key="ed_thu2")
+                    ef2 = st.number_input("금(2학기)", value=td_s2[4], step=1, key="ed_fri2")
+
                     if st.form_submit_button("수정 완료"):
-                        st.session_state.ins_df.loc[st.session_state.ins_df['name']==tn, ['rate','rate_after','mon','tue','wed','thu','fri','subject','target_classes']] = [er, era, em, et, ew, eth, ef, esj, ecl]
+                        s2_vals = ([str(int(v)) for v in [em2, et2, ew2, eth2, ef2]]
+                                   if e_use_s2 else ['']*5)
+                        st.session_state.ins_df.loc[
+                            st.session_state.ins_df['name'] == tn,
+                            ['rate','rate_after','mon','tue','wed','thu','fri',
+                             'mon2','tue2','wed2','thu2','fri2','subject','target_classes']
+                        ] = [er, era, em, et, ew, eth, ef,
+                             s2_vals[0], s2_vals[1], s2_vals[2], s2_vals[3], s2_vals[4], esj, ecl]
                         conn.update(worksheet="Instructors", data=st.session_state.ins_df)
                         st.rerun()
                     if st.form_submit_button("❌ 삭제"):
@@ -281,7 +388,6 @@ with st.sidebar:
                         conn.update(worksheet="Instructors", data=st.session_state.ins_df)
                         st.rerun()
     else:
-        # ✅ 수정 6: 공통제외 사유 입력을 form 안으로 이동 (기존엔 버튼 콜백 밖에 있어서 항상 빈값 저장됨)
         with st.form("excl_form"):
             ex_r = st.date_input("공통 제외일", (date(2026,7,20), date(2026,8,20)))
             ex_note = st.text_input("사유", "")
@@ -333,16 +439,16 @@ with c_d2:
                         ind_ex.add(ind_date)
                     elif ind['type'] == '추가출근':
                         ind_add_hours[ind_date] = int(ind.get('hours', 0))
-            hm_i = {0:int(ins['mon']), 1:int(ins['tue']), 2:int(ins['wed']), 3:int(ins['thu']), 4:int(ins['fri'])}
             curr_d = date(2026, 3, 1)
             while curr_d <= date(2026, 12, 31):
                 if curr_d in ind_add_hours:
-                    gt += get_regular_hours(curr_d, hm_i, ind_add_hours) * int(ins['rate'])
-                elif curr_d.weekday()<5 and curr_d not in all_ex_common and curr_d not in ind_ex:
-                    gt += hm_i.get(curr_d.weekday(), 0) * int(ins['rate'])
+                    gt += get_regular_hours(curr_d, ins, ind_add_hours) * int(ins['rate'])
+                elif curr_d.weekday() < 5 and curr_d not in all_ex_common and curr_d not in ind_ex:
+                    # ✅ [변경] 날짜별 학기에 맞는 시수 사용
+                    gt += get_hours_map(ins, curr_d).get(curr_d.weekday(), 0) * int(ins['rate'])
                 curr_d += timedelta(days=1)
             t_aft_sum = st.session_state.after_df[st.session_state.after_df['name']==ins['name']]
-            gt += int(t_aft_sum[['w1','w2','w3','w4','w5','w6']].sum().sum() * ins.get('rate_after', 50000))
+            gt += int(t_aft_sum[['w1','w2','w3','w4','w5','w6']].sum().sum() * _num(ins.get('rate_after'), 50000))
     st.metric("💰 2026년 전체 소요 예산", f"{gt:,}원")
 
 st.divider()
@@ -351,15 +457,26 @@ st.divider()
 if not st.session_state.ins_df.empty:
     target = st.selectbox("조회 강사 선택", st.session_state.ins_df['name'].unique())
     ins_row = st.session_state.ins_df[st.session_state.ins_df['name'] == target].iloc[-1]
-    hm = {0: int(ins_row['mon']), 1: int(ins_row['tue']), 2: int(ins_row['wed']), 3: int(ins_row['thu']), 4: int(ins_row['fri'])}
-    
+
+    # ✅ [신규] 현재 적용 중인 학기별 시수 안내
+    if has_sem2(ins_row):
+        st.caption(f"🔹 1학기 시수: {hours_map_label(ins_row, 1)}  |  "
+                   f"2학기 시수: {hours_map_label(ins_row, 2)}  "
+                   f"(2학기 시작 {SEMESTER2_START.isoformat()})")
+    else:
+        st.caption(f"🔹 연간 동일 시수: {hours_map_label(ins_row, 1)}")
+
     with st.expander(f"📍 {target} 선생님 개인 일정 관리"):
         ind_cols = st.columns(2)
         with ind_cols[0]:
             with st.form(f"ind_{target}"):
                 id_d = st.date_input("날짜")
                 it_t = st.selectbox("구분", ["개인휴무","추가출근"])
-                ih = st.number_input("추가출근 시수", min_value=0, value=get_default_additional_hours(id_d, hm), step=1, help="원래 수업 요일이 아닌 날은 기존 요일별 시수 중 가장 많이 쓰는 시수를 기본값으로 넣습니다. 필요하면 직접 수정하세요.")
+                ih = st.number_input(
+                    "추가출근 시수", min_value=0,
+                    value=get_default_additional_hours(id_d, get_hours_map(ins_row, id_d)), step=1,
+                    help="원래 수업 요일이 아닌 날은 해당 학기 요일별 시수 중 가장 많이 쓰는 시수를 기본값으로 넣습니다. 필요하면 직접 수정하세요."
+                )
                 in_n = st.text_input("사유")
                 if st.form_submit_button("추가"):
                     new_ind = pd.DataFrame([{"name":target,"date":id_d.isoformat(),"type":it_t,"hours":int(ih) if it_t == "추가출근" else 0,"note":in_n if in_n else ""}])
@@ -383,8 +500,7 @@ if not st.session_state.ins_df.empty:
 
     cur_aft = st.session_state.after_df[st.session_state.after_df['name']==target].copy().reset_index(drop=True)
     if cur_aft.empty: cur_aft = get_initial_after_df(target)
-    
-    # ✅ 수정 8: tips 딕셔너리에 None이 절대 들어가지 않도록 safe_str 적용
+
     tips = {d: safe_str(label, "공휴일") for d, label in HOLIDAYS_DICT.items()}
 
     for _, ex in st.session_state.excl_df.iterrows():
@@ -396,8 +512,7 @@ if not st.session_state.ins_df.empty:
                 tips[ts_d] = note_val
                 ts_d += timedelta(days=1)
         except: continue
-    
-    # ✅ t_ind_df 재참조 안전하게 처리
+
     t_ind_df = st.session_state.excl_indiv_df[st.session_state.excl_indiv_df['name']==target].copy()
     if 'note' in t_ind_df.columns:
         t_ind_df['note'] = t_ind_df['note'].fillna('').astype(str).replace({'nan':'','None':''})
@@ -418,15 +533,17 @@ if not st.session_state.ins_df.empty:
                 add_hours[td_d] = int(ex.get('hours', 0))
                 tips[td_d] = f"[추가] {note_val}".strip()
         except: continue
-    
+
+    # ✅ [변경] 시수 0인 요일 판정을 날짜별 학기 기준으로
     work_dates = list(filter(
-        lambda d: (d.weekday() < 5 and d not in tips and hm.get(d.weekday(), 0) > 0) or (d in adds),
+        lambda d: (d.weekday() < 5 and d not in tips
+                   and get_hours_map(ins_row, d).get(d.weekday(), 0) > 0) or (d in adds),
         [date(2026,3,1) + timedelta(n) for n in range(306)]
     ))
 
     st.subheader(f"📊 {target} 선생님 상세 리포트")
     try:
-        y_pdf = create_yearly_calendar_pdf(target, work_dates, tips, adds, hm, cur_aft, add_hours)
+        y_pdf = create_yearly_calendar_pdf(ins_row, work_dates, tips, adds, cur_aft, add_hours)
         _ = st.download_button("📄 1년치 통합 달력 PDF 출력", y_pdf, f"2026_연간달력_{target}.pdf", "application/pdf")
     except Exception as e:
         st.caption(f"연간 달력 PDF 생성 실패: {type(e).__name__}")
@@ -452,8 +569,8 @@ if not st.session_state.ins_df.empty:
             cur_aft.loc[r_idx, [f'w{i+1}' for i in range(len(cal))]] = wa
             mw = sorted([d for d in work_dates if d.month == m])
             if inner_cols[1].button(f"📄 {m}월 양식 PDF", key=f"btn_{m}"):
-                pdf_m = create_monthly_pdf(ins_row, m_l, mw, hm, add_hours)
-                f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''))} 시간강사({target}선생님) 수업 현황.pdf"
+                pdf_m = create_monthly_pdf(ins_row, m_l, mw, add_hours)
+                f_name = f"2026학년도 {m_l} {safe_str(ins_row.get('subject', ''), '')} 시간강사({target}선생님) 수업 현황.pdf"
                 inner_cols[1].download_button(f"⬇️ 다운로드", pdf_m, f_name, "application/pdf", key=f"dl_{m}")
 
             # 왼쪽 컬럼: 달력 HTML
@@ -471,7 +588,7 @@ if not st.session_state.ins_df.empty:
                         cls, t = "", ""
                         if d in work_dates:
                             cls = "background:#90EE90; font-weight:bold;"
-                            wh += get_regular_hours(d, hm, add_hours)
+                            wh += get_regular_hours(d, ins_row, add_hours)
                             m_rc += 1
                             if d in adds: cls = "background:#add8e6; font-weight:bold;"
                         elif d in tips:
@@ -482,8 +599,10 @@ if not st.session_state.ins_df.empty:
                 html += f'<td style="border:1px solid #ddd; background:#f9f9f9; color:#666;">{int(wh)}</td>'
                 html += f'<td style="border:1px solid #ddd; background:#eef6ff; font-weight:bold; color:#007bff;">{int(wh + wa[w_idx])}</td></tr>'
             inner_cols[0].markdown(html + '</table>', unsafe_allow_html=True)
-            m_ah, m_rh = sum(wa), sum([get_regular_hours(d, hm, add_hours) for d in mw])
-            m_rp, m_ap = m_rh * int(ins_row['rate']), m_ah * int(ins_row.get('rate_after', 50000))
+            m_ah = sum(wa)
+            m_rh = sum([get_regular_hours(d, ins_row, add_hours) for d in mw])
+            m_rp = m_rh * int(ins_row['rate'])
+            m_ap = m_ah * _num(ins_row.get('rate_after'), 50000)
             st.info(f"💰 {m}월 합계: {(m_rp + m_ap):,}원 (출근 {m_rc}일) | 정규 {int(m_rh)}h | 방과후 {int(m_ah)}h")
             t_reg_h += m_rh
             t_aft_h += m_ah
@@ -498,7 +617,7 @@ if not st.session_state.ins_df.empty:
 
     st.subheader("🏁 연간 최종 합계 요약")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("총 출근", f"{t_att_d}일")      
+    c1.metric("총 출근", f"{t_att_d}일")
     c2.metric("정규 시수", f"{t_reg_h}h")
     c3.metric("방과후 시수", f"{t_aft_h}h")
-    c4.metric("급여 합계", f"{int((t_reg_h*ins_row['rate'])+(t_aft_h*ins_row.get('rate_after',50000))):,}원")
+    c4.metric("급여 합계", f"{int((t_reg_h*int(ins_row['rate']))+(t_aft_h*_num(ins_row.get('rate_after'), 50000))):,}원")
