@@ -10,7 +10,14 @@ import os
 # --- 0. 페이지 설정 ---
 st.set_page_config(page_title="2026 강사 통합 관리 시스템", layout="wide")
 
-st.sidebar.info("✅ v25.0 - 예산 총괄 탭 추가")
+st.sidebar.info("✅ v25.1 - 중복 데이터 점검 추가")
+
+# ✅ [신규] 구글 시트에서 직접 고친 내용을 앱에 다시 불러오기
+#    (앱은 처음 접속할 때 한 번만 시트를 읽어 두기 때문에, 시트를 직접 고친 뒤에는 꼭 눌러야 함)
+if st.sidebar.button("🔄 구글 시트에서 다시 불러오기"):
+    for k in ['ins_df', 'excl_df', 'after_df', 'excl_indiv_df']:
+        st.session_state.pop(k, None)
+    st.rerun()
 
 # 2학기 시작 기준일 (이 날짜부터 2학기 시수 적용)
 #    7~8월은 방학 제외기간이라 그 사이 어느 날짜로 잡아도 결과는 동일합니다.
@@ -211,6 +218,8 @@ def compute_budget_df(ins_df, common_excl, indiv_df, after_df):
     """강사 × 월 단위의 시수·금액 표(롱 포맷)를 만든다"""
     if ins_df is None or ins_df.empty:
         return pd.DataFrame()
+    # ✅ [수정] 같은 이름이 여러 행이면 상세 화면(달력)과 같은 '마지막 행' 하나만 계산
+    ins_df = ins_df.drop_duplicates(subset='name', keep='last')
     has_aft = (after_df is not None and not after_df.empty
                and 'name' in after_df.columns and 'month' in after_df.columns)
     rows = []
@@ -246,6 +255,14 @@ def compute_budget_df(ins_df, common_excl, indiv_df, after_df):
                 "합계": int(reg_p + aft_p),
             })
     return pd.DataFrame(rows)
+
+
+# ✅ [신규] 중복 데이터 점검
+def find_duplicates(df, keys):
+    """keys 기준으로 2번 이상 나오는 행을 모두 반환"""
+    if df is None or df.empty or any(k not in df.columns for k in keys):
+        return pd.DataFrame()
+    return df[df.duplicated(subset=keys, keep=False)].sort_values(keys)
 
 
 def style_total_row(df, total_label="총계"):
@@ -417,6 +434,14 @@ with st.sidebar:
                 f2 = st.number_input("금(2학기)", value=0, step=1, key="add_fri2")
 
                 if st.form_submit_button("저장"):
+                    # ✅ [신규] 같은 이름으로 중복 등록 방지
+                    if not n.strip():
+                        st.error("강사 이름을 입력하세요.")
+                        st.stop()
+                    if n.strip() in set(st.session_state.ins_df.get('name', pd.Series(dtype=str))):
+                        st.error(f"'{n.strip()}' 선생님은 이미 등록되어 있습니다. '수정/삭제'에서 고쳐 주세요.")
+                        st.stop()
+                    n = n.strip()
                     s2_vals = [str(int(v)) for v in [m2, t2, w2, th2, f2]] if use_s2 else ['']*5
                     new = pd.DataFrame([{
                         "name": n, "rate": r, "rate_after": ra,
@@ -431,7 +456,7 @@ with st.sidebar:
         else:
             if not st.session_state.ins_df.empty:
                 tn = st.selectbox("강사 선택", st.session_state.ins_df['name'].unique())
-                td = st.session_state.ins_df[st.session_state.ins_df['name'] == tn].iloc[0]
+                td = st.session_state.ins_df[st.session_state.ins_df['name'] == tn].iloc[-1]
                 td_s2 = get_hours_map(td, semester=2)
                 with st.form("edit"):
                     esj = st.text_input("과목", safe_str(td.get('subject', ''), ''))
@@ -567,7 +592,11 @@ with tab_detail:
                     conn.update(worksheet="Exclusions_Indiv", data=st.session_state.excl_indiv_df)
                     st.rerun()
 
-        cur_aft = st.session_state.after_df[st.session_state.after_df['name']==target].copy().reset_index(drop=True)
+        cur_aft = st.session_state.after_df[st.session_state.after_df['name']==target].copy()
+        # ✅ [수정] 같은 달이 여러 행이면 첫 행만 사용 → '최종 저장' 시 중복 행이 정리됨
+        if 'month' in cur_aft.columns:
+            cur_aft = cur_aft.drop_duplicates(subset='month', keep='first')
+        cur_aft = cur_aft.reset_index(drop=True)
         if cur_aft.empty: cur_aft = get_initial_after_df(target)
 
         tips = {d: safe_str(label, "공휴일") for d, label in HOLIDAYS_DICT.items()}
@@ -699,6 +728,49 @@ with tab_budget:
         st.info("등록된 강사가 없습니다.")
     else:
         st.caption("방과후 시수는 각 강사 화면에서 '시수 데이터 최종 저장'을 누른 값을 기준으로 계산됩니다.")
+
+        # (0) ✅ [신규] 데이터 점검 — 달력에 안 보이는 중복 행 찾기
+        dup_ins = find_duplicates(st.session_state.ins_df, ['name'])
+        dup_aft = find_duplicates(st.session_state.after_df, ['name', 'month'])
+        dup_ind = find_duplicates(st.session_state.excl_indiv_df, ['name', 'date', 'type'])
+        if dup_ins.empty and dup_aft.empty and dup_ind.empty:
+            st.success("✅ 데이터 점검: 중복된 행이 없습니다.")
+        else:
+            with st.expander("⚠️ 데이터 점검: 중복된 행이 있습니다 (눌러서 확인)", expanded=True):
+                st.caption("화면(달력)에는 한 줄만 보이지만 구글 시트에는 여러 줄이 저장된 경우입니다. "
+                           "예산 계산은 달력과 같은 행 하나만 쓰도록 맞춰 두었으니, 아래에서 정리하면 시트도 깔끔해집니다.")
+                if not dup_ins.empty:
+                    st.markdown(f"**Instructors 시트 — 같은 이름의 강사 행** "
+                                f"({', '.join(dup_ins['name'].unique())})")
+                    st.dataframe(dup_ins, use_container_width=True)
+                    st.caption("달력·예산에는 각 이름의 **마지막 행**이 쓰입니다. 정리하면 마지막 행만 남습니다.")
+                    if st.button("🧹 강사 중복 정리 (마지막 행만 남기기)", key="fix_dup_ins"):
+                        st.session_state.ins_df = (st.session_state.ins_df
+                                                   .drop_duplicates(subset='name', keep='last')
+                                                   .reset_index(drop=True))
+                        conn.update(worksheet="Instructors", data=st.session_state.ins_df)
+                        st.rerun()
+                if not dup_aft.empty:
+                    st.markdown(f"**AfterSchool 시트 — 같은 강사·같은 달의 방과후 행** "
+                                f"({', '.join(dup_aft['name'].unique())})")
+                    st.dataframe(dup_aft, use_container_width=True)
+                    st.caption("달력·예산에는 각 달의 **첫 행**이 쓰입니다. 정리하면 첫 행만 남습니다.")
+                    if st.button("🧹 방과후 중복 정리 (첫 행만 남기기)", key="fix_dup_aft"):
+                        st.session_state.after_df = (st.session_state.after_df
+                                                     .drop_duplicates(subset=['name', 'month'], keep='first')
+                                                     .reset_index(drop=True))
+                        conn.update(worksheet="AfterSchool", data=st.session_state.after_df)
+                        st.rerun()
+                if not dup_ind.empty:
+                    st.markdown("**Exclusions_Indiv 시트 — 같은 날짜에 같은 개인 일정이 여러 번** "
+                                "(계산에는 영향 없음)")
+                    st.dataframe(dup_ind, use_container_width=True)
+                    if st.button("🧹 개인 일정 중복 정리", key="fix_dup_ind"):
+                        st.session_state.excl_indiv_df = (st.session_state.excl_indiv_df
+                                                          .drop_duplicates(subset=['name', 'date', 'type'], keep='last')
+                                                          .reset_index(drop=True))
+                        conn.update(worksheet="Exclusions_Indiv", data=st.session_state.excl_indiv_df)
+                        st.rerun()
 
         # (1) 핵심 지표
         tot_all = int(budget_df['합계'].sum())
